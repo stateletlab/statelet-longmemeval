@@ -1,0 +1,22 @@
+# Run artifacts (the harness writes these; they are not source).
+#
+# CLAUDE.md: "generated `retrieval_eval_*` / `*_checkpoint*` files there are run
+# artifacts, not source." They were still showing up as 80 untracked paths /
+# 256 MB, which buries real changes in `git status` and invites an `add -A` from
+# someone in a hurry.
+last_report.json
+*_report.json
+# `*_report.json` is a SUFFIX match and misses the harness's other naming —
+# `report_ms43.json`, `report_pref8b.json` — so match the prefix form too.
+report_*.json
+__pycache__/
+
+# Per-run output directories, one per eval invocation (a single one holds ~1k
+# `chunk_*.md`). Listed by family rather than a blanket `*/` so a genuinely new
+# source subdirectory here is never silently ignored.
+reader_judge_*/
+mem0proto_*/
+rj*/
+tmp_*/
+retrieval_eval_*/
+*_checkpoint*/

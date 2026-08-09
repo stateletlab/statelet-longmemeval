@@ -1,0 +1,24 @@
+{
+  "question_id": "smoke_0001",
+  "question_type": "single-session-user",
+  "question": "What breed is the user's dog?",
+  "answer": "A border collie named Rufus.",
+  "question_date": "2023-06-01",
+  "haystack_session_ids": ["s0", "s1", "s2"],
+  "answer_session_ids": ["s1"],
+  "haystack_dates": ["2023/05/01 (Mon) 09:00", "2023/05/15 (Mon) 18:30", "2023/05/20 (Sat) 11:00"],
+  "haystack_sessions": [
+    [
+      {"role": "user", "content": "I love hiking on the weekends. The trails near my house are gorgeous in spring."},
+      {"role": "assistant", "content": "That sounds wonderful. Do you have a favorite trail?"}
+    ],
+    [
+      {"role": "user", "content": "My dog Rufus came hiking with me today. He is a border collie and absolutely tireless on the trail."},
+      {"role": "assistant", "content": "Border collies are amazing hiking companions. Rufus must have had a blast."}
+    ],
+    [
+      {"role": "user", "content": "I tried a new sourdough recipe this morning. The crust came out perfect."},
+      {"role": "assistant", "content": "Nicely done. Sourdough crust is tricky to get right."}
+    ]
+  ]
+}

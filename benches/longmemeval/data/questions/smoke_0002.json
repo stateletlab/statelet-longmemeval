@@ -1,0 +1,24 @@
+{
+  "question_id": "smoke_0002",
+  "question_type": "knowledge-update",
+  "question": "Where does the user currently work?",
+  "answer": "At Globex, where they moved after leaving Initech.",
+  "question_date": "2023-09-01",
+  "haystack_session_ids": ["k0", "k1", "k2"],
+  "answer_session_ids": ["k2"],
+  "haystack_dates": ["2023/03/10 (Fri) 14:00", "2023/06/05 (Mon) 10:00", "2023/08/20 (Sun) 16:00"],
+  "haystack_sessions": [
+    [
+      {"role": "user", "content": "I just started a new role at Initech as a backend engineer. The team seems great."},
+      {"role": "assistant", "content": "Congratulations on the new role at Initech."}
+    ],
+    [
+      {"role": "user", "content": "Work has been hectic but I am enjoying the backend systems we are building."},
+      {"role": "assistant", "content": "Glad to hear it is going well."}
+    ],
+    [
+      {"role": "user", "content": "Big news: I left Initech and now work at Globex. The commute is shorter and the pay is better."},
+      {"role": "assistant", "content": "That is exciting. Congratulations on the move to Globex."}
+    ]
+  ]
+}

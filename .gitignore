@@ -1,0 +1,29 @@
+# Run artifacts: the harnesses write these, they are not source.
+#
+# `*_report.json` is a SUFFIX match and misses the harness's other naming
+# (`report_ms43.json`), so both forms are listed.
+last_report.json
+*_report.json
+report_*.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Per-run output directories, one per invocation (a single one can hold ~1,000
+# `chunk_*.md`). Listed by family rather than a blanket `*/` so a genuinely new
+# source subdirectory is never silently ignored.
+benches/longmemeval/reader_judge_*/
+benches/longmemeval/mem0proto_*/
+benches/longmemeval/rj*/
+benches/longmemeval/tmp_*/
+benches/longmemeval/runs/
+retrieval_eval_*/
+*_checkpoint*/
+
+# Advisory single-instance locks.
+*.lock
+
+# macOS Finder metadata. Untracked but noisy in `git status`, and a stray
+# `git add -A` would otherwise commit them.
+.DS_Store
