@@ -123,6 +123,16 @@ jobs:
           dnf -y install clang perl-core perl-IPC-Cmd
           git config --global --add safe.directory '*'
 
+          # openssl-sys only consults pkg-config when its `vendored` feature is
+          # off OR OPENSSL_NO_VENDOR is set to something other than "0". The
+          # feature is on (cargo tree confirms it for this target), so the image
+          # must be exporting the variable — and a pkg-config build would link
+          # the container's libssl, which is not on the manylinux allowlist and
+          # would leave the wheel depending on a library the user may not have.
+          # Force the vendored, statically linked build.
+          echo "OPENSSL_NO_VENDOR=0" >> "$GITHUB_ENV"
+          echo "image OPENSSL_* environment: $(env | grep -i openssl || echo '(none)')"
+
       # windows-latest ships LLVM and Strawberry Perl, but neither is wired up:
       # librocksdb-sys' bindgen needs LIBCLANG_PATH, and openssl-src otherwise
       # finds Git Bash's perl, which cannot drive the MSVC build.
@@ -172,7 +182,7 @@ jobs:
       # setup-python has nothing to offer inside a manylinux image, which ships
       # its own interpreters; on macOS it is the only way to pin one. Both
       # branches leave the chosen interpreter in $PYBIN.
-      - name: Set up Python (macOS)
+      - name: Set up Python (host runners)
         if: matrix.container == ''
         uses: actions/setup-python@v5
         with:
