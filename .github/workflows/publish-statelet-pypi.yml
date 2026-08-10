@@ -257,27 +257,44 @@ jobs:
               export LIBCLANG_PATH="$(dirname "$LIBCLANG")"
               echo "libclang: $LIBCLANG"
 
-              # openssl-sys reached pkg-config on the last run even though the
-              # manifest asks for `vendored`, and its build script never so
-              # much as read OPENSSL_NO_VENDOR — that lookup lives inside the
-              # #[cfg(feature = "vendored")] block, and openssl-sys prints
-              # every variable it touches, so the absence proves the feature
-              # was not compiled in. Ask for it on the command line, where
-              # nothing in the resolver can drop it.
+              # Hand openssl-sys a static OpenSSL of our own.
               #
-              # A system libssl is not an acceptable answer here even if one
-              # were installed: it is not on the manylinux allowlist, so the
-              # wheel would depend on a library the installing machine may not
-              # have. Static vendored OpenSSL or nothing.
+              # The manifest asks for `vendored`, and cargo tree agrees when
+              # resolved outside the container, but in here openssl-sys is
+              # compiled without the feature: its build script never reads
+              # OPENSSL_NO_VENDOR, and it logs every variable it touches, so
+              # the missing line is proof rather than inference. Passing
+              # openssl/vendored on the command line changed nothing. Instead
+              # of chasing that, satisfy the crate through the other door.
+              #
+              # Static, and built here, for two reasons: libssl is not on the
+              # manylinux allowlist, so a dynamic link would leave the wheel
+              # depending on a library the installing machine may not have;
+              # and CentOS 7 ships OpenSSL 1.0.2, which openssl-sys 0.9 no
+              # longer supports at all.
+              yum -y install perl-core perl-IPC-Cmd
+              curl -fsSL --retry 5 -o /tmp/openssl.tar.gz \
+                https://github.com/openssl/openssl/releases/download/openssl-3.0.16/openssl-3.0.16.tar.gz
+              mkdir -p /tmp/openssl-src
+              tar -C /tmp/openssl-src --strip-components=1 -xzf /tmp/openssl.tar.gz
+              ( cd /tmp/openssl-src
+                ./Configure --prefix=/opt/openssl-static --openssldir=/opt/openssl-static \
+                  no-shared no-tests >/dev/null
+                make -j"$(nproc)" >/dev/null
+                make install_sw >/dev/null )
+              export OPENSSL_DIR=/opt/openssl-static
+              export OPENSSL_STATIC=1
               export OPENSSL_NO_VENDOR=0
+              echo "static openssl: $("/opt/openssl-static/bin/openssl" version)"
 
               echo "--- cargo: $(cargo --version) / $(rustc --version)"
-              echo "--- what enables openssl-sys in this environment:"
-              cargo tree --locked --features data-node,agent-state \
+              echo "--- what enables openssl-sys here:"
+              cargo fetch --locked >/dev/null 2>&1 || true
+              cargo tree --locked --offline --features data-node,agent-state \
                 --target "$TARGET" -i openssl-sys -e features 2>&1 | head -25 || true
 
               cargo build --locked --release \
-                --features data-node,agent-state,openssl/vendored \
+                --features data-node,agent-state \
                 --target "$TARGET"
             '
 
