@@ -76,11 +76,18 @@ jobs:
             platform_tag: manylinux_2_28_aarch64
             glibc_max: "2.28"
             native: "yes"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform_tag: win_amd64
+            native: "yes"
 
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     defaults:
       run:
+        # bash everywhere, including Windows (Git Bash), so one script serves
+        # every row instead of a PowerShell fork of each step.
+        shell: bash
         working-directory: statelet
 
     steps:
@@ -104,16 +111,38 @@ jobs:
           printf 'ref=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           printf 'Building stateletlab/statelet@%s\n' "$REF"
 
-      # The manylinux images are AlmaLinux 8 and carry gcc/cmake/perl but not
-      # clang, which librocksdb-sys needs for bindgen, nor the perl modules
-      # openssl-src drives its build with.
+      # The manylinux images are AlmaLinux 8 and carry gcc/cmake but not clang,
+      # which librocksdb-sys needs for bindgen. perl-core rather than the
+      # individual modules openssl-src wants: FindBin has no standalone package
+      # on EL8 (modular filtering hides it) and the metapackage covers the lot.
       - name: Install container build deps
         if: matrix.container != ''
         working-directory: .
         run: |
           set -euo pipefail
-          dnf -y install clang perl-IPC-Cmd perl-Data-Dumper perl-FindBin
+          dnf -y install clang perl-core perl-IPC-Cmd
           git config --global --add safe.directory '*'
+
+      # windows-latest ships LLVM and Strawberry Perl, but neither is wired up:
+      # librocksdb-sys' bindgen needs LIBCLANG_PATH, and openssl-src otherwise
+      # finds Git Bash's perl, which cannot drive the MSVC build.
+      - name: Configure Windows build toolchain
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: |
+          set -euo pipefail
+          if [ -d "/c/Program Files/LLVM/bin" ]; then
+            printf 'LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin\n' >> "$GITHUB_ENV"
+          else
+            echo "::error::LLVM not found; librocksdb-sys bindgen will fail"
+            exit 1
+          fi
+          if [ -x "/c/Strawberry/perl/bin/perl.exe" ]; then
+            printf 'OPENSSL_SRC_PERL=C:\\Strawberry\\perl\\bin\\perl.exe\n' >> "$GITHUB_ENV"
+          else
+            echo "::error::Strawberry Perl not found; the vendored OpenSSL build will fail"
+            exit 1
+          fi
 
       - name: Checkout stateletlab/statelet
         uses: actions/checkout@v4
@@ -184,12 +213,13 @@ jobs:
       - name: Stage binaries into the SDK
         run: |
           set -euo pipefail
+          case "$RUNNER_OS" in Windows) EXE=".exe" ;; *) EXE="" ;; esac
           TARGET_DIR="target/${{ matrix.target }}/release"
           BIN_DIR="sdk/python/statelet/bin"
           mkdir -p "$BIN_DIR"
-          cp "$TARGET_DIR/metadata_service" "$BIN_DIR/statelet-metadata"
-          cp "$TARGET_DIR/raft_engine"      "$BIN_DIR/statelet-datanode"
-          cp "$TARGET_DIR/gateway"          "$BIN_DIR/statelet-gateway"
+          cp "$TARGET_DIR/metadata_service$EXE" "$BIN_DIR/statelet-metadata$EXE"
+          cp "$TARGET_DIR/raft_engine$EXE"      "$BIN_DIR/statelet-datanode$EXE"
+          cp "$TARGET_DIR/gateway$EXE"          "$BIN_DIR/statelet-gateway$EXE"
           chmod +x "$BIN_DIR"/statelet-*
 
       # The platform tag is a promise to pip, and pip enforces nothing at
@@ -238,25 +268,33 @@ jobs:
         if: matrix.native == 'yes'
         run: |
           set -euo pipefail
-          "$PYBIN" -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install --upgrade pip
-          /tmp/smoke/bin/pip install sdk/python/dist/*.whl
-          /tmp/smoke/bin/python -c "import statelet; print('statelet', statelet.__file__)"
-          /tmp/smoke/bin/python -c "from statelet import statelet_pb2, statelet_pb2_grpc"
+          # Windows venvs put the interpreter in Scripts/, not bin/. The venv
+          # goes beside the checkout rather than under $RUNNER_TEMP, whose
+          # backslashed value does not survive Git Bash path handling.
+          case "$RUNNER_OS" in Windows) VBIN="Scripts" ;; *) VBIN="bin" ;; esac
+          "$PYBIN" -m venv ../smoke-venv
+          V="../smoke-venv/$VBIN"
+          "$V/python" -m pip install --upgrade pip
+          "$V/python" -m pip install sdk/python/dist/*.whl
+          "$V/python" -c "import statelet; print('statelet', statelet.__file__)"
+          "$V/python" -c "from statelet import statelet_pb2, statelet_pb2_grpc"
           # The `statelet-gateway`/`-metadata`/`-datanode` console scripts are
           # thin shims that exec these files; if the retag/copy dance dropped
           # them the wheel is useless, so fail the build rather than ship it.
-          /tmp/smoke/bin/python - <<'PY'
+          "$V/python" - <<'PY'
           import os, sys, statelet
           bindir = os.path.join(os.path.dirname(statelet.__file__), "bin")
-          present = sorted(f for f in os.listdir(bindir) if f.startswith("statelet-"))
-          print("bundled binaries:", present)
+          found = [f for f in os.listdir(bindir) if f.startswith("statelet-")]
+          # Windows wheels carry the .exe suffix; compare on the bare stem.
+          present = sorted(os.path.splitext(f)[0] if f.endswith(".exe") else f for f in found)
+          print("bundled binaries:", sorted(found))
           missing = {"statelet-gateway", "statelet-metadata", "statelet-datanode"} - set(present)
           if missing:
               sys.exit("missing from wheel: %s" % sorted(missing))
-          for f in present:
-              if not os.access(os.path.join(bindir, f), os.X_OK):
-                  sys.exit("not executable in wheel: %s" % f)
+          if os.name != "nt":
+              for f in found:
+                  if not os.access(os.path.join(bindir, f), os.X_OK):
+                      sys.exit("not executable in wheel: %s" % f)
           PY
 
       - uses: actions/upload-artifact@v4
