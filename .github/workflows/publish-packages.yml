@@ -1,0 +1,554 @@
+# Builds the Statelet server binaries and ships them as OS packages.
+#
+# Companion to publish-statelet-pypi.yml: same engine checkout, same manylinux
+# containers, same glibc discipline — different distribution channels.
+#
+#   tarball / zip   every platform, attached to the GitHub Release
+#   .deb            amd64, arm64      apt
+#   .rpm            x86_64, aarch64   yum/dnf
+#   .msi            x86_64            winget
+#   formula         Homebrew tap
+#
+# Releases are cut on THIS repository, not on stateletlab/statelet: release
+# assets of a private repository are not downloadable, so every URL a package
+# manager hands its users — brew's `url`, winget's installer, the apt pool —
+# would 404. This repository is public, so its release assets resolve.
+#
+# Required configuration:
+#   secrets.STATELET_REPO_TOKEN  fine-grained PAT, Contents:read on
+#                                stateletlab/statelet (shared with the PyPI
+#                                workflow)
+# Optional — the matching job is skipped when absent, rather than failing:
+#   secrets.TAP_GITHUB_TOKEN     write access to stateletlab/homebrew-statelet
+#   secrets.WINGET_GITHUB_TOKEN  a token that can open PRs against winget-pkgs
+
+name: Publish Packages (apt/yum/brew/winget)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, no leading v (e.g. 0.1.1)"
+        required: true
+      ref:
+        description: "Ref of stateletlab/statelet to build"
+        required: false
+        default: main
+      dry_run:
+        description: "Build and package, but cut no release and push nothing"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+          - os: macos-14
+            target: x86_64-apple-darwin
+            platform: darwin-amd64
+          - os: ubuntu-latest
+            build_image: quay.io/pypa/manylinux2014_x86_64
+            target: x86_64-unknown-linux-gnu
+            platform: linux-amd64
+            glibc_max: "2.17"
+          - os: ubuntu-24.04-arm
+            build_image: quay.io/pypa/manylinux2014_aarch64
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            glibc_max: "2.17"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-amd64
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: statelet
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          path: lme
+          persist-credentials: false
+
+      - name: Checkout stateletlab/statelet
+        uses: actions/checkout@v4
+        with:
+          repository: stateletlab/statelet
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.STATELET_REPO_TOKEN }}
+          path: statelet
+          persist-credentials: false
+
+      # See publish-statelet-pypi.yml for why these two are wired by hand.
+      - name: Configure Windows build toolchain
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test -d "/c/Program Files/LLVM/bin" \
+            || { echo "::error::LLVM not found"; exit 1; }
+          test -x "/c/Strawberry/perl/bin/perl.exe" \
+            || { echo "::error::Strawberry Perl not found"; exit 1; }
+          printf 'LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin\n' >> "$GITHUB_ENV"
+          printf 'OPENSSL_SRC_PERL=C:\\Strawberry\\perl\\bin\\perl.exe\n' >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        if: matrix.build_image == ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo build
+        if: matrix.build_image == ''
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: statelet
+          key: pkg-${{ matrix.target }}
+
+      - name: Build Rust binaries
+        if: matrix.build_image == ''
+        run: cargo build --locked --release --features data-node,agent-state --target ${{ matrix.target }}
+
+      - name: Build Rust binaries (manylinux container)
+        if: matrix.build_image != ''
+        working-directory: .
+        env:
+          BUILD_IMAGE: ${{ matrix.build_image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/work" -w /work/statelet \
+            -e CARGO_HOME=/work/.cargo-home \
+            -e CARGO_TERM_COLOR=always \
+            -e TARGET="$TARGET" \
+            "$BUILD_IMAGE" \
+            bash /work/lme/.github/scripts/manylinux-build.sh
+
+      - name: Stage the payload
+        working-directory: .
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in Windows) EXE=".exe" ;; *) EXE="" ;; esac
+          SRC="statelet/target/${{ matrix.target }}/release"
+          rm -rf stage && mkdir -p stage
+          cp "$SRC/metadata_service$EXE" "stage/statelet-metadata$EXE"
+          cp "$SRC/raft_engine$EXE"      "stage/statelet-datanode$EXE"
+          cp "$SRC/gateway$EXE"          "stage/statelet-gateway$EXE"
+          cp "$SRC/statelet-cli$EXE"     "stage/statelet-cli$EXE"
+          # A shell driver, so Windows has no use for it.
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            cp statelet/scripts/statelet-cluster stage/statelet-cluster
+          fi
+          chmod +x stage/statelet-*
+          ls -lh stage
+
+      # Same contract as the wheel's platform tag: a package that installs and
+      # then cannot start is worse than one that refuses to install, so the
+      # floor the .deb declares has to be one the binaries actually meet.
+      - name: Verify the glibc floor
+        if: matrix.glibc_max != ''
+        working-directory: .
+        run: |
+          set -euo pipefail
+          need="$(for b in stage/statelet-metadata stage/statelet-datanode \
+                           stage/statelet-gateway stage/statelet-cli; do
+                    objdump -T "$b" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' || true
+                  done | sort -uV | tail -1)"
+          need="${need#GLIBC_}"
+          echo "binaries need at most glibc ${need:-none}; packages will declare ${{ matrix.glibc_max }}"
+          if [ -n "$need" ] && \
+             [ "$(printf '%s\n%s\n' "$need" "${{ matrix.glibc_max }}" | sort -V | tail -1)" \
+               != "${{ matrix.glibc_max }}" ]; then
+            echo "::error::binaries require glibc $need, above the declared ${{ matrix.glibc_max }}"
+            exit 1
+          fi
+
+      - name: Archive
+        working-directory: .
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="statelet-${VERSION}-${{ matrix.platform }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            (cd stage && 7z a -tzip "../${NAME}.zip" ./*) >/dev/null
+            ls -lh "${NAME}.zip"
+          else
+            tar -czf "${NAME}.tar.gz" -C stage .
+            ls -lh "${NAME}.tar.gz"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: |
+            statelet-*.tar.gz
+            statelet-*.zip
+            stage/
+          if-no-files-found: error
+
+  package-deb:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux-amd64
+            arch: amd64
+          - platform: linux-arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: lme, persist-credentials: false }
+      - uses: actions/checkout@v4
+        with:
+          repository: stateletlab/statelet
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.STATELET_REPO_TOKEN }}
+          path: statelet
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: dl
+
+      - name: Build .deb
+        env:
+          VERSION: ${{ inputs.version }}
+          ARCH: ${{ matrix.arch }}
+          STAGE_DIR: dl/stage
+          UNIT_FILE: statelet/packaging/systemd/statelet.service
+          LICENSE_FILE: statelet/LICENSE
+          GLIBC_MIN: "2.17"
+        run: bash lme/.github/scripts/build-deb.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: "*.deb"
+          if-no-files-found: error
+
+  package-rpm:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux-amd64
+            arch: x86_64
+          - platform: linux-arm64
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: lme, persist-credentials: false }
+      - uses: actions/checkout@v4
+        with:
+          repository: stateletlab/statelet
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.STATELET_REPO_TOKEN }}
+          path: statelet
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: dl
+
+      - name: Install rpmbuild
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Build .rpm
+        env:
+          VERSION: ${{ inputs.version }}
+          ARCH: ${{ matrix.arch }}
+          STAGE_DIR: dl/stage
+          UNIT_FILE: statelet/packaging/systemd/statelet.service
+        run: bash lme/.github/scripts/build-rpm.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: "*.rpm"
+          if-no-files-found: error
+
+  package-msi:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: stateletlab/statelet
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.STATELET_REPO_TOKEN }}
+          path: statelet
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-windows-amd64
+          path: dl
+
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install -g wix
+
+      - name: Build .msi
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          wix build `
+            -d Version=$env:VERSION `
+            -d BinDir=dl/stage `
+            -o "statelet-$env:VERSION-windows-amd64.msi" `
+            statelet/packaging/windows/installer.wxs
+          Get-ChildItem *.msi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi-amd64
+          path: "*.msi"
+          if-no-files-found: error
+
+  release:
+    needs: [build, package-deb, package-rpm, package-msi]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # cut the release on this repository
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - id: meta
+        run: |
+          set -euo pipefail
+          printf 'tag=v%s\n' "${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          # `stage/` rides along in the binaries artifacts; only ship archives.
+          find dist -maxdepth 1 -type f -printf '%f\t%s\n' | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Statelet v${{ inputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/statelet-*.tar.gz
+            dist/statelet-*.zip
+            dist/statelet_*.deb
+            dist/statelet-*.rpm
+            dist/statelet-*.msi
+
+  publish-brew:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate formula
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p Formula
+          sha() { sha256sum "dist/statelet-${VERSION}-$1.tar.gz" | cut -d' ' -f1; }
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          cat > Formula/statelet.rb <<FORMULA
+          class Statelet < Formula
+            desc "Distributed key-value storage engine with LSM-tree, Raft, and vector index"
+            homepage "https://github.com/stateletlab/statelet"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE}/statelet-${VERSION}-darwin-arm64.tar.gz"
+                sha256 "$(sha darwin-arm64)"
+              else
+                url "${BASE}/statelet-${VERSION}-darwin-amd64.tar.gz"
+                sha256 "$(sha darwin-amd64)"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE}/statelet-${VERSION}-linux-arm64.tar.gz"
+                sha256 "$(sha linux-arm64)"
+              else
+                url "${BASE}/statelet-${VERSION}-linux-amd64.tar.gz"
+                sha256 "$(sha linux-amd64)"
+              end
+            end
+
+            def install
+              bin.install "statelet-metadata"
+              bin.install "statelet-datanode"
+              bin.install "statelet-gateway"
+              bin.install "statelet-cli"
+              bin.install "statelet-cluster"
+            end
+
+            def post_install
+              (var/"statelet/data/node1").mkpath
+              (var/"statelet/metadata").mkpath
+              (var/"log/statelet").mkpath
+            end
+
+            service do
+              run [opt_bin/"statelet-cluster", "start"]
+              keep_alive true
+              working_dir var/"statelet"
+              log_path var/"log/statelet/cluster.log"
+              error_log_path var/"log/statelet/cluster.log"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/statelet-cli --version 2>&1", 2)
+            end
+          end
+          FORMULA
+          cat Formula/statelet.rb
+
+      - name: Push formula to the tap
+        if: env.TAP_TOKEN != ''
+        uses: cpina/github-action-push-to-another-repository@main
+        with:
+          source-directory: Formula
+          destination-github-username: stateletlab
+          destination-repository-name: homebrew-statelet
+          target-directory: Formula
+          user-email: ci@statelet.ai
+          user-name: statelet-ci
+          commit-message: "statelet ${{ inputs.version }}"
+
+      - name: Tap not configured
+        if: env.TAP_TOKEN == ''
+        run: |
+          echo "::warning::TAP_GITHUB_TOKEN is unset and stateletlab/homebrew-statelet may not exist; formula built but not pushed"
+
+  publish-winget:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+    steps:
+      - name: Submit to winget-pkgs
+        if: env.WINGET_TOKEN != ''
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v$env:VERSION/statelet-$env:VERSION-windows-amd64.msi"
+          Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest" -OutFile wingetcreate.exe
+          .\wingetcreate.exe update `
+            --id stateletlab.Statelet `
+            --version $env:VERSION `
+            --urls $url `
+            --token $env:WINGET_TOKEN `
+            --submit
+
+      - name: winget not configured
+        if: env.WINGET_TOKEN == ''
+        shell: bash
+        run: echo "::warning::WINGET_GITHUB_TOKEN is unset; skipping the winget-pkgs submission"
+
+  publish-apt-yum-repo:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # pushes the `packages` branch of this repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: packages
+          path: repo
+        continue-on-error: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          path: new-debs
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rpm-*
+          path: new-rpms
+          merge-multiple: true
+
+      - name: Install repo tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev createrepo-c
+
+      - name: Build apt and yum metadata
+        run: |
+          set -euo pipefail
+          if [ ! -d repo/.git ]; then
+            mkdir -p repo && (cd repo && git init -q && git checkout -qb packages)
+          fi
+
+          mkdir -p repo/apt/pool repo/apt/dists/stable/main/binary-amd64 \
+                   repo/apt/dists/stable/main/binary-arm64
+          cp new-debs/*.deb repo/apt/pool/
+          (
+            cd repo/apt
+            # Per-architecture Packages files: one index listing both arches
+            # makes apt offer an arm64 .deb to an amd64 machine.
+            for arch in amd64 arm64; do
+              dpkg-scanpackages --arch "$arch" pool \
+                > "dists/stable/main/binary-$arch/Packages"
+              gzip -kf "dists/stable/main/binary-$arch/Packages"
+            done
+            cat > dists/stable/Release <<EOF
+          Origin: Statelet
+          Label: Statelet
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          EOF
+          )
+
+          mkdir -p repo/yum/x86_64 repo/yum/aarch64
+          cp new-rpms/*.x86_64.rpm repo/yum/x86_64/
+          cp new-rpms/*.aarch64.rpm repo/yum/aarch64/
+          createrepo_c repo/yum/x86_64/
+          createrepo_c repo/yum/aarch64/
+
+      - name: Publish the packages branch
+        run: |
+          set -euo pipefail
+          cd repo
+          git config user.name "statelet-ci"
+          git config user.email "ci@statelet.ai"
+          git add -A
+          git commit -qm "packages: statelet ${{ inputs.version }}" || {
+            echo "nothing changed"; exit 0; }
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            HEAD:packages
