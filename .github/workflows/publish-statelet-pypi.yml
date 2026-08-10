@@ -298,7 +298,7 @@ jobs:
           V="smoke-venv/$VBIN"
           "$V/python" -m pip install --upgrade pip
           # --no-deps: this checks the wheel we just built, not PyPI's copy of
-          # statelet-client, which the dependency would otherwise drag in (and
+          # statelet-sdk, which the dependency would otherwise drag in (and
           # which does not exist yet on a first release).
           "$V/python" -m pip install --no-deps wheel-src/dist/*.whl
           "$V/python" -c "import statelet_server; print(statelet_server.__file__)"
