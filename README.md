@@ -60,23 +60,37 @@ which lives here rather than in the engine repository: that repository is
 private, this one is public, and PyPI Trusted Publishing binds a project to one
 public workflow file.
 
-The workflow checks out `stateletlab/statelet`, cross-compiles the Rust servers
-for four targets, copies `gateway` / `metadata_service` / `raft_engine` into
+The workflow checks out `stateletlab/statelet`, builds the Rust servers for
+four targets, copies `gateway` / `metadata_service` / `raft_engine` into
 `sdk/python/statelet/bin/` as `statelet-gateway` / `-metadata` / `-datanode`,
 builds a wheel per target and retags it from `py3-none-any` to the real
 platform tag, then publishes the set. So the PyPI install gives you the SDK
 **and** the servers — `statelet-gateway` on `$PATH` runs the bundled binary.
 
-| Target | Wheel tag |
-|---|---|
-| `aarch64-apple-darwin` | `macosx_11_0_arm64` |
-| `x86_64-apple-darwin` | `macosx_10_12_x86_64` |
-| `x86_64-unknown-linux-gnu` | `manylinux_2_17_x86_64` |
-| `aarch64-unknown-linux-gnu` | `manylinux_2_17_aarch64` |
+| Target | Built on | Wheel tag |
+|---|---|---|
+| `aarch64-apple-darwin` | `macos-14` | `macosx_11_0_arm64` |
+| `x86_64-apple-darwin` | `macos-14`, cross | `macosx_10_12_x86_64` |
+| `x86_64-unknown-linux-gnu` | `manylinux_2_28_x86_64` container | `manylinux_2_28_x86_64` |
+| `aarch64-unknown-linux-gnu` | `manylinux_2_28_aarch64` container on an ARM runner | `manylinux_2_28_aarch64` |
 
-No sdist and no pure-Python fallback wheel are published, so platforms outside
-that table (Windows, musl) get "no matching distribution" and must install from
-a checkout.
+**Why two Linux rows cover every distribution.** `manylinux` is a cross-distro
+ABI contract, not a distro: one `manylinux_2_28` wheel serves any glibc ≥ 2.28
+system — RHEL/CentOS 8+, Debian 10+, Ubuntu 18.10+, Fedora, Arch, openSUSE.
+That is why the Linux jobs run *inside* the official manylinux images. Building
+on `ubuntu-latest` and relabelling the wheel would emit a binary needing glibc
+2.39 under a tag promising 2.17, which pip installs happily and which then dies
+at startup with `GLIBC_2.39 not found`. A `Verify the glibc floor` step reads
+the actual symbol versions out of the binaries with `objdump` and fails the
+build if they exceed what the tag claims, so the promise cannot silently rot.
+
+**What is not covered.** No sdist and no pure-Python fallback wheel are
+published, so anything outside the table gets "no matching distribution" and
+must install from a checkout. That means Alpine/musl, which would need
+`musllinux` wheels, and Windows — the latter is a port rather than a matrix
+row: the SIGTERM handlers in all three binaries, `fd_limit`'s `setrlimit`, and
+nine files' worth of `std::os::unix` have no Windows arm, and the engine
+carries exactly one `#[cfg(windows)]` block today.
 
 **One-time setup**, both on this repository:
 

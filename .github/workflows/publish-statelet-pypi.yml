@@ -60,16 +60,25 @@ jobs:
             target: x86_64-apple-darwin
             platform_tag: macosx_10_12_x86_64
             native: "no"
-          - os: ubuntu-latest     # Linux x86_64
+          # The Linux wheels build inside the official manylinux images so the
+          # glibc floor in the tag is a property of the toolchain rather than a
+          # string we assert. Building on ubuntu-latest and relabelling would
+          # produce a binary needing glibc 2.39 in a wheel pip hands to CentOS 7.
+          - os: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
             target: x86_64-unknown-linux-gnu
-            platform_tag: manylinux_2_17_x86_64
+            platform_tag: manylinux_2_28_x86_64
+            glibc_max: "2.28"
             native: "yes"
-          - os: ubuntu-latest     # Linux aarch64 (cross-compiled)
+          - os: ubuntu-24.04-arm  # native ARM runner, so no cross toolchain
+            container: quay.io/pypa/manylinux_2_28_aarch64
             target: aarch64-unknown-linux-gnu
-            platform_tag: manylinux_2_17_aarch64
-            native: "no"
+            platform_tag: manylinux_2_28_aarch64
+            glibc_max: "2.28"
+            native: "yes"
 
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     defaults:
       run:
         working-directory: statelet
@@ -95,6 +104,17 @@ jobs:
           printf 'ref=%s\n' "$REF" >> "$GITHUB_OUTPUT"
           printf 'Building stateletlab/statelet@%s\n' "$REF"
 
+      # The manylinux images are AlmaLinux 8 and carry gcc/cmake/perl but not
+      # clang, which librocksdb-sys needs for bindgen, nor the perl modules
+      # openssl-src drives its build with.
+      - name: Install container build deps
+        if: matrix.container != ''
+        working-directory: .
+        run: |
+          set -euo pipefail
+          dnf -y install clang perl-IPC-Cmd perl-Data-Dumper perl-FindBin
+          git config --global --add safe.directory '*'
+
       - name: Checkout stateletlab/statelet
         uses: actions/checkout@v4
         with:
@@ -115,29 +135,34 @@ jobs:
           workspaces: statelet
           key: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-          mkdir -p ~/.cargo
-          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
+      # setup-python has nothing to offer inside a manylinux image, which ships
+      # its own interpreters; on macOS it is the only way to pin one. Both
+      # branches leave the chosen interpreter in $PYBIN.
+      - name: Set up Python (macOS)
+        if: matrix.container == ''
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Select interpreter
+        working-directory: .
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.container }}" ]; then
+            echo "PYBIN=/opt/python/cp312-cp312/bin/python" >> "$GITHUB_ENV"
+          else
+            echo "PYBIN=$(command -v python)" >> "$GITHUB_ENV"
+          fi
+
       - name: Apply version override
         if: inputs.version != ''
         run: |
-          python - <<'PY'
+          "$PYBIN" - <<'PY'
           import re, pathlib, os
           p = pathlib.Path("sdk/python/pyproject.toml")
           s = p.read_text()
@@ -156,11 +181,9 @@ jobs:
       - name: Build Rust binaries
         run: cargo build --locked --release --features data-node,agent-state --target ${{ matrix.target }}
 
-      - name: Build wheel
+      - name: Stage binaries into the SDK
         run: |
           set -euo pipefail
-          pip install --upgrade build wheel setuptools
-
           TARGET_DIR="target/${{ matrix.target }}/release"
           BIN_DIR="sdk/python/statelet/bin"
           mkdir -p "$BIN_DIR"
@@ -169,19 +192,43 @@ jobs:
           cp "$TARGET_DIR/gateway"          "$BIN_DIR/statelet-gateway"
           chmod +x "$BIN_DIR"/statelet-*
 
+      # The platform tag is a promise to pip, and pip enforces nothing at
+      # install time — an over-claimed glibc floor surfaces as a runtime
+      # "GLIBC_x.y not found" on the user's machine. Break the build instead.
+      - name: Verify the glibc floor matches the wheel tag
+        if: matrix.glibc_max != ''
+        run: |
+          set -euo pipefail
+          need="$(for b in sdk/python/statelet/bin/statelet-*; do
+                    objdump -T "$b" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' || true
+                  done | sort -uV | tail -1)"
+          need="${need#GLIBC_}"
+          echo "binaries need at most glibc ${need:-none}; tag promises ${{ matrix.glibc_max }}"
+          if [ -n "$need" ] && \
+             [ "$(printf '%s\n%s\n' "$need" "${{ matrix.glibc_max }}" | sort -V | tail -1)" \
+               != "${{ matrix.glibc_max }}" ]; then
+            echo "::error::binaries require glibc $need but the wheel is tagged ${{ matrix.platform_tag }}"
+            exit 1
+          fi
+
+      - name: Build wheel
+        run: |
+          set -euo pipefail
+          "$PYBIN" -m pip install --upgrade build wheel setuptools
+
           cd sdk/python
-          python -m build --wheel --no-isolation
+          "$PYBIN" -m build --wheel --no-isolation
 
           # setuptools produces py3-none-any because the payload is data files,
           # not an extension module; retag so pip only offers each wheel to the
           # platform whose binaries it actually carries.
           ANY_WHEEL="$(ls dist/statelet-*-py3-none-any.whl | head -1)"
           TMPDIR="$(mktemp -d)"
-          python -m wheel unpack -d "$TMPDIR" "$ANY_WHEEL"
+          "$PYBIN" -m wheel unpack -d "$TMPDIR" "$ANY_WHEEL"
           UNPACKED="$(ls -d "$TMPDIR"/statelet-*)"
           sed -i'' -e 's/^Tag: py3-none-any$/Tag: py3-none-${{ matrix.platform_tag }}/' \
               "$UNPACKED"/statelet-*.dist-info/WHEEL
-          python -m wheel pack -d dist "$UNPACKED"
+          "$PYBIN" -m wheel pack -d dist "$UNPACKED"
           rm -f "$ANY_WHEEL"
           rm -rf "$TMPDIR"
 
@@ -191,7 +238,7 @@ jobs:
         if: matrix.native == 'yes'
         run: |
           set -euo pipefail
-          python -m venv /tmp/smoke
+          "$PYBIN" -m venv /tmp/smoke
           /tmp/smoke/bin/pip install --upgrade pip
           /tmp/smoke/bin/pip install sdk/python/dist/*.whl
           /tmp/smoke/bin/python -c "import statelet; print('statelet', statelet.__file__)"
