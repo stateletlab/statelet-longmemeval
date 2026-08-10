@@ -217,15 +217,41 @@ jobs:
                 | sh -s -- -y --profile minimal --default-toolchain stable --target "$TARGET"
               export PATH="$CARGO_HOME/bin:$PATH"
 
-              # librocksdb-sys drives bindgen, which needs a libclang the
-              # CentOS 7 base image does not carry and whose EL7 package is far
-              # too old. manylinux ships an installer for a self-contained
-              # modern toolchain; use that rather than the distro one.
-              manylinux-install-clang
-              LIBCLANG="$(find /opt/clang -name "libclang.so*" 2>/dev/null | head -1)"
+              # librocksdb-sys drives bindgen, which needs a real libclang.so.
+              # Note manylinux-install-clang is no use here: it installs a
+              # *static* toolchain — /opt/clang/bin/clang and friends, no
+              # shared library at all.
+              #
+              # SCL llvm-toolset first: CentOS 7 base clang is 3.4, far below
+              # what bindgen accepts, but the image already has the SCL repos
+              # wired up because its devtoolset gcc comes from them, and
+              # llvm-toolset-7.0 carries a matching libclang plus its resource
+              # headers. The libclang wheel is the fallback, with the resource
+              # headers borrowed from the static toolchain.
+              find_libclang() { find /usr /opt -name "libclang.so*" 2>/dev/null | head -1; }
+
+              LIBCLANG="$(find_libclang)"
               if [ -z "$LIBCLANG" ]; then
-                echo "::error::no libclang.so under /opt/clang"
-                find /opt/clang -maxdepth 3 -name "*clang*" | head -30
+                echo "--- no libclang in the image; trying SCL llvm-toolset"
+                yum -y install llvm-toolset-7.0-clang || true
+                LIBCLANG="$(find_libclang)"
+              fi
+              if [ -z "$LIBCLANG" ]; then
+                echo "--- SCL did not provide one; falling back to the libclang wheel"
+                /opt/python/cp312-cp312/bin/pip install --quiet libclang || true
+                LIBCLANG="$(find / -xdev -name "libclang.so*" 2>/dev/null | head -1)"
+                # That wheel ships the library without the builtin headers, so
+                # bindgen would fail on stddef.h; take those from static clang.
+                manylinux-install-clang || true
+                RESOURCE_DIR="$(find /opt/clang/lib/clang -maxdepth 2 -name include -type d 2>/dev/null | head -1)"
+                if [ -n "$RESOURCE_DIR" ]; then
+                  export BINDGEN_EXTRA_CLANG_ARGS="-I$RESOURCE_DIR"
+                  echo "bindgen resource dir: $RESOURCE_DIR"
+                fi
+              fi
+              if [ -z "$LIBCLANG" ]; then
+                echo "::error::no libclang.so anywhere in the image"
+                find / -xdev -name "*clang*" -maxdepth 6 2>/dev/null | head -40
                 exit 1
               fi
               export LIBCLANG_PATH="$(dirname "$LIBCLANG")"
