@@ -259,19 +259,30 @@ jobs:
 
               # Hand openssl-sys a static OpenSSL of our own.
               #
-              # The manifest asks for `vendored`, and cargo tree agrees when
-              # resolved outside the container, but in here openssl-sys is
-              # compiled without the feature: its build script never reads
-              # OPENSSL_NO_VENDOR, and it logs every variable it touches, so
-              # the missing line is proof rather than inference. Passing
-              # openssl/vendored on the command line changed nothing. Instead
-              # of chasing that, satisfy the crate through the other door.
+              # The engine asks for openssl with `vendored`, but that is not
+              # the copy that matters here. ort's default features include
+              # tls-native, which drags ort-sys -> ureq -> native-tls ->
+              # openssl-sys into the *build-script* graph, and under edition
+              # 2024's resolver those features do not unify with the ordinary
+              # dependency graph. That copy resolves to plain `default`, has
+              # no vendored path compiled in, and goes looking for a system
+              # OpenSSL. `--features openssl/vendored` cannot reach it.
+              #
+              # macOS never hit this because native-tls uses Security.framework
+              # there, and a bare ubuntu runner never hit it because libssl-dev
+              # is installed. Only a clean container exposes it.
               #
               # Static, and built here, for two reasons: libssl is not on the
               # manylinux allowlist, so a dynamic link would leave the wheel
               # depending on a library the installing machine may not have;
               # and CentOS 7 ships OpenSSL 1.0.2, which openssl-sys 0.9 no
               # longer supports at all.
+              #
+              # The tidier fix lives in the engine — ort with
+              # default-features = false would drop ureq, native-tls and this
+              # whole second openssl-sys, since load-dynamic makes the binary
+              # download pointless — but that is a manifest change to make
+              # deliberately, not a side effect of a packaging workflow.
               yum -y install perl-core perl-IPC-Cmd
               curl -fsSL --retry 5 -o /tmp/openssl.tar.gz \
                 https://github.com/openssl/openssl/releases/download/openssl-3.0.16/openssl-3.0.16.tar.gz
