@@ -17,8 +17,10 @@ is not the engine repo.
 ## Quick start
 
 ```bash
-# 0. Install the Statelet Python SDK from a Statelet checkout (six modules
-#    `import statelet`; the harness will not start without it):
+# 0. Install the Statelet Python SDK (six modules `import statelet`; the
+#    harness will not start without it) — from PyPI, which also brings the
+#    server binaries, or editable from a Statelet checkout:
+pip install statelet
 pip install -e /path/to/statelet/sdk/python
 
 # 1. Start a cluster (in the Statelet checkout — this also sets the ingest
@@ -43,11 +45,60 @@ LME_STAGE=judge LME_DETAIL_LOG=path/to/detail.log \
 | `benches/longmemeval/` | The harness proper — ingest, query, judging, metrics, reporting. A Python package with **relative imports**, invoked as `python -m benches.longmemeval`. |
 | `eval/` | Standalone retrieval/answer harnesses (`longmemeval_retrieval_eval.py` and the per-model drivers) plus `sessiondoc_postprocess.py`, which imports the retrieval harness directly. Independent of the `benches/` package. |
 | `scripts/` | Shell driver for the full-500 run (`run-longmemeval-500.sh`). |
+| `.github/workflows/` | `publish-statelet-pypi.yml` — builds and publishes the `statelet` PyPI package from the engine repository. See [Publishing the SDK](#publishing-the-statelet-sdk-to-pypi). |
 
 The `benches/` prefix is kept rather than flattened to a top-level
 `longmemeval/`: the package uses relative imports and every documented command
 is `python -m benches.longmemeval …`, so moving it would invalidate this README
 and the shell driver for no functional gain.
+
+## Publishing the `statelet` SDK to PyPI
+
+`pip install statelet` is served by
+[`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml),
+which lives here rather than in the engine repository: that repository is
+private, this one is public, and PyPI Trusted Publishing binds a project to one
+public workflow file.
+
+The workflow checks out `stateletlab/statelet`, cross-compiles the Rust servers
+for four targets, copies `gateway` / `metadata_service` / `raft_engine` into
+`sdk/python/statelet/bin/` as `statelet-gateway` / `-metadata` / `-datanode`,
+builds a wheel per target and retags it from `py3-none-any` to the real
+platform tag, then publishes the set. So the PyPI install gives you the SDK
+**and** the servers — `statelet-gateway` on `$PATH` runs the bundled binary.
+
+| Target | Wheel tag |
+|---|---|
+| `aarch64-apple-darwin` | `macosx_11_0_arm64` |
+| `x86_64-apple-darwin` | `macosx_10_12_x86_64` |
+| `x86_64-unknown-linux-gnu` | `manylinux_2_17_x86_64` |
+| `aarch64-unknown-linux-gnu` | `manylinux_2_17_aarch64` |
+
+No sdist and no pure-Python fallback wheel are published, so platforms outside
+that table (Windows, musl) get "no matching distribution" and must install from
+a checkout.
+
+**One-time setup**, both on this repository:
+
+1. `secrets.STATELET_REPO_TOKEN` — a fine-grained PAT with `Contents: read` on
+   `stateletlab/statelet`, used only by `actions/checkout`.
+2. A GitHub environment named `pypi`, registered on PyPI as a Trusted Publisher
+   for project `statelet`: owner `stateletlab`, repository
+   `statelet-longmemeval`, workflow `publish-statelet-pypi.yml`, environment
+   `pypi`. For the first ever release this is a *pending* publisher, created
+   from the PyPI account page before the project exists.
+
+**Running it.** Manually via *Actions → Publish statelet to PyPI → Run
+workflow*, taking a `ref` of the engine repository (default `main`), an
+optional `version` that rewrites `sdk/python/pyproject.toml`, and a `dry_run`
+box that builds and smoke-tests the wheels without publishing. Or automatically
+by pushing a `statelet-v<version>` tag here, which builds engine tag
+`<version>` — `statelet-v0.1.1` → `v0.1.1`.
+
+The version comes from `sdk/python/pyproject.toml` in the engine repository;
+publishing uses `skip-existing`, so re-running against a version already on
+PyPI is a no-op rather than an error. Keep the triggers as they are —
+`pull_request` would hand the private-repo token to fork contributors.
 
 ## The three phases, and who owns each
 

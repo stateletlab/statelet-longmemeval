@@ -1,0 +1,239 @@
+# Builds the `statelet` PyPI distribution from the (private) engine repository.
+#
+# The engine lives in stateletlab/statelet, which is private; this repository is
+# public and owns the PyPI Trusted Publishing identity for the `statelet`
+# project. So the source is checked out here with a PAT, the Rust server
+# binaries are cross-compiled per platform, stuffed into the Python SDK, and the
+# resulting platform wheels are published under one release.
+#
+# Required repository configuration:
+#   secrets.STATELET_REPO_TOKEN  fine-grained PAT with Contents:read on
+#                                stateletlab/statelet
+#   environment `pypi`           bound to a PyPI Trusted Publisher for project
+#                                `statelet`, workflow `publish-statelet-pypi.yml`,
+#                                owner `stateletlab`, repo `statelet-longmemeval`
+#
+# Note: the engine source is private. Keep this workflow on manual/tag triggers
+# only — never `pull_request`, which would expose the token and the build log to
+# fork contributors.
+
+name: Publish statelet to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref (branch, tag or SHA) of stateletlab/statelet to build"
+        required: false
+        default: main
+      version:
+        description: "Override the version in sdk/python/pyproject.toml (blank = use as-is)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Build and smoke-test the wheels but do not publish"
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - "statelet-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-statelet-pypi
+  cancel-in-progress: false
+
+jobs:
+  build-wheel:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon (native)
+            target: aarch64-apple-darwin
+            platform_tag: macosx_11_0_arm64
+            native: "yes"
+          - os: macos-14          # Intel Mac (cross-compile on arm64)
+            target: x86_64-apple-darwin
+            platform_tag: macosx_10_12_x86_64
+            native: "no"
+          - os: ubuntu-latest     # Linux x86_64
+            target: x86_64-unknown-linux-gnu
+            platform_tag: manylinux_2_17_x86_64
+            native: "yes"
+          - os: ubuntu-latest     # Linux aarch64 (cross-compiled)
+            target: aarch64-unknown-linux-gnu
+            platform_tag: manylinux_2_17_aarch64
+            native: "no"
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: statelet
+
+    steps:
+      # `statelet-v0.1.1` here builds engine tag `v0.1.1`. Refs go through env
+      # rather than `${{ }}` interpolation so a ref name can never be spliced
+      # into this shell.
+      - name: Resolve engine ref
+        id: ref
+        working-directory: .
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          REF="$INPUT_REF"
+          if [ -z "$REF" ]; then
+            case "$GITHUB_REF_TYPE" in
+              tag) REF="${GITHUB_REF_NAME#statelet-}" ;;
+              *)   REF="main" ;;
+            esac
+          fi
+          printf 'ref=%s\n' "$REF" >> "$GITHUB_OUTPUT"
+          printf 'Building stateletlab/statelet@%s\n' "$REF"
+
+      - name: Checkout stateletlab/statelet
+        uses: actions/checkout@v4
+        with:
+          repository: stateletlab/statelet
+          ref: ${{ steps.ref.outputs.ref }}
+          token: ${{ secrets.STATELET_REPO_TOKEN }}
+          path: statelet
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: statelet
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          mkdir -p ~/.cargo
+          echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply version override
+        if: inputs.version != ''
+        run: |
+          python - <<'PY'
+          import re, pathlib, os
+          p = pathlib.Path("sdk/python/pyproject.toml")
+          s = p.read_text()
+          s, n = re.subn(r'(?m)^version = ".*"$',
+                         'version = "%s"' % os.environ["NEW_VERSION"], s, count=1)
+          assert n == 1, "no version line found in sdk/python/pyproject.toml"
+          p.write_text(s)
+          PY
+        env:
+          NEW_VERSION: ${{ inputs.version }}
+
+      - name: Build Rust binaries
+        run: cargo build --release --features data-node,agent-state --target ${{ matrix.target }}
+
+      - name: Build wheel
+        run: |
+          set -euo pipefail
+          pip install --upgrade build wheel setuptools
+
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          BIN_DIR="sdk/python/statelet/bin"
+          mkdir -p "$BIN_DIR"
+          cp "$TARGET_DIR/metadata_service" "$BIN_DIR/statelet-metadata"
+          cp "$TARGET_DIR/raft_engine"      "$BIN_DIR/statelet-datanode"
+          cp "$TARGET_DIR/gateway"          "$BIN_DIR/statelet-gateway"
+          chmod +x "$BIN_DIR"/statelet-*
+
+          cd sdk/python
+          python -m build --wheel --no-isolation
+
+          # setuptools produces py3-none-any because the payload is data files,
+          # not an extension module; retag so pip only offers each wheel to the
+          # platform whose binaries it actually carries.
+          ANY_WHEEL="$(ls dist/statelet-*-py3-none-any.whl | head -1)"
+          TMPDIR="$(mktemp -d)"
+          python -m wheel unpack -d "$TMPDIR" "$ANY_WHEEL"
+          UNPACKED="$(ls -d "$TMPDIR"/statelet-*)"
+          sed -i'' -e 's/^Tag: py3-none-any$/Tag: py3-none-${{ matrix.platform_tag }}/' \
+              "$UNPACKED"/statelet-*.dist-info/WHEEL
+          python -m wheel pack -d dist "$UNPACKED"
+          rm -f "$ANY_WHEEL"
+          rm -rf "$TMPDIR"
+
+          ls -lh dist/
+
+      - name: Smoke-test the wheel
+        if: matrix.native == 'yes'
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --upgrade pip
+          /tmp/smoke/bin/pip install sdk/python/dist/*.whl
+          /tmp/smoke/bin/python -c "import statelet; print('statelet', statelet.__file__)"
+          /tmp/smoke/bin/python -c "from statelet import statelet_pb2, statelet_pb2_grpc"
+          # The `statelet-gateway`/`-metadata`/`-datanode` console scripts are
+          # thin shims that exec these files; if the retag/copy dance dropped
+          # them the wheel is useless, so fail the build rather than ship it.
+          /tmp/smoke/bin/python - <<'PY'
+          import os, sys, statelet
+          bindir = os.path.join(os.path.dirname(statelet.__file__), "bin")
+          present = sorted(f for f in os.listdir(bindir) if f.startswith("statelet-"))
+          print("bundled binaries:", present)
+          missing = {"statelet-gateway", "statelet-metadata", "statelet-datanode"} - set(present)
+          if missing:
+              sys.exit("missing from wheel: %s" % sorted(missing))
+          for f in present:
+              if not os.access(os.path.join(bindir, f), os.X_OK):
+                  sys.exit("not executable in wheel: %s" % f)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: statelet/sdk/python/dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    needs: build-wheel
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI Trusted Publishing (OIDC) — no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: List wheels
+        run: ls -lh dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+          verbose: true
