@@ -149,8 +149,12 @@ jobs:
         env:
           NEW_VERSION: ${{ inputs.version }}
 
+      # --locked: build exactly the graph in the engine's committed Cargo.lock.
+      # Without it a floating dependency can pick up a newer release than the
+      # one that was tested and fail here (ort rc.12 -> rc.13 did exactly that),
+      # or worse, publish a wheel built from an untested graph.
       - name: Build Rust binaries
-        run: cargo build --release --features data-node,agent-state --target ${{ matrix.target }}
+        run: cargo build --locked --release --features data-node,agent-state --target ${{ matrix.target }}
 
       - name: Build wheel
         run: |
