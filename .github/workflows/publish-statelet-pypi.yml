@@ -257,14 +257,28 @@ jobs:
               export LIBCLANG_PATH="$(dirname "$LIBCLANG")"
               echo "libclang: $LIBCLANG"
 
-              # openssl-sys falls back to pkg-config, which finds nothing here,
-              # unless the vendored source build is explicitly left enabled.
-              # Linking the container'"'"'s libssl would be wrong anyway: it is not
-              # on the manylinux allowlist, so the wheel would depend on a
-              # library the installing machine may not have.
+              # openssl-sys reached pkg-config on the last run even though the
+              # manifest asks for `vendored`, and its build script never so
+              # much as read OPENSSL_NO_VENDOR — that lookup lives inside the
+              # #[cfg(feature = "vendored")] block, and openssl-sys prints
+              # every variable it touches, so the absence proves the feature
+              # was not compiled in. Ask for it on the command line, where
+              # nothing in the resolver can drop it.
+              #
+              # A system libssl is not an acceptable answer here even if one
+              # were installed: it is not on the manylinux allowlist, so the
+              # wheel would depend on a library the installing machine may not
+              # have. Static vendored OpenSSL or nothing.
               export OPENSSL_NO_VENDOR=0
 
-              cargo build --locked --release --features data-node,agent-state --target "$TARGET"
+              echo "--- cargo: $(cargo --version) / $(rustc --version)"
+              echo "--- what enables openssl-sys in this environment:"
+              cargo tree --locked --features data-node,agent-state \
+                --target "$TARGET" -i openssl-sys -e features 2>&1 | head -25 || true
+
+              cargo build --locked --release \
+                --features data-node,agent-state,openssl/vendored \
+                --target "$TARGET"
             '
 
       - name: Stage binaries into the SDK
