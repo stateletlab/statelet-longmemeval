@@ -71,19 +71,25 @@ platform tag, then publishes the set. So the PyPI install gives you the SDK
 |---|---|---|
 | `aarch64-apple-darwin` | `macos-14` | `macosx_11_0_arm64` |
 | `x86_64-apple-darwin` | `macos-14`, cross | `macosx_10_12_x86_64` |
-| `x86_64-unknown-linux-gnu` | `manylinux_2_28_x86_64` container | `manylinux_2_28_x86_64` |
-| `aarch64-unknown-linux-gnu` | `manylinux_2_28_aarch64` container on an ARM runner | `manylinux_2_28_aarch64` |
+| `x86_64-unknown-linux-gnu` | `manylinux2014_x86_64` container | `manylinux2014_x86_64` |
+| `aarch64-unknown-linux-gnu` | `manylinux2014_aarch64` container on an ARM runner | `manylinux2014_aarch64` |
 | `x86_64-pc-windows-msvc` | `windows-latest` | `win_amd64` |
 
 **Why two Linux rows cover every distribution.** `manylinux` is a cross-distro
-ABI contract, not a distro: one `manylinux_2_28` wheel serves any glibc ≥ 2.28
-system — RHEL/CentOS 8+, Debian 10+, Ubuntu 18.10+, Fedora, Arch, openSUSE.
-That is why the Linux jobs run *inside* the official manylinux images. Building
-on `ubuntu-latest` and relabelling the wheel would emit a binary needing glibc
-2.39 under a tag promising 2.17, which pip installs happily and which then dies
-at startup with `GLIBC_2.39 not found`. A `Verify the glibc floor` step reads
-the actual symbol versions out of the binaries with `objdump` and fails the
-build if they exceed what the tag claims, so the promise cannot silently rot.
+ABI contract, not a distro: one `manylinux2014` wheel serves any glibc ≥ 2.17
+machine — CentOS/RHEL 7 and up, Debian 8+, Ubuntu 14.04+, Fedora, Arch,
+openSUSE, Rocky, Alma. That is why the Linux binaries compile *inside* the
+official manylinux images. Building on `ubuntu-latest` and relabelling the
+wheel would emit a binary needing glibc 2.39 under a tag promising 2.17, which
+pip installs happily and which then dies at startup with `GLIBC_2.39 not
+found`. A `Verify the glibc floor` step reads the actual symbol versions back
+out of the binaries with `objdump` and fails the build if they exceed what the
+tag claims, so the promise cannot silently rot.
+
+The image is a `docker run` inside the job rather than the job's `container:`.
+CentOS 7 predates glibc 2.28, which the Actions runner's own node20 requires,
+so `actions/checkout` and the other JavaScript actions stay on the host and
+only `cargo` goes inside the image.
 
 **What is not covered.** No sdist and no pure-Python fallback wheel are
 published, so anything outside the table gets "no matching distribution" and
