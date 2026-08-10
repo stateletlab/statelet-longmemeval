@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "statelet"
-version = "0.1.1"
+version = "0.1.2"
 description = "Statelet server binaries — agent memory with KV, vector search, and temporal causal graphs in one database"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -32,6 +32,7 @@ dependencies = [
 statelet-gateway = "statelet_server._cli:gateway"
 statelet-metadata = "statelet_server._cli:metadata"
 statelet-datanode = "statelet_server._cli:datanode"
+statelet-cluster = "statelet_server._cluster:main"
 
 [project.urls]
 Homepage = "https://statelet.com"

@@ -7,7 +7,25 @@ memory with KV, vector search, and temporal causal graphs in one database.
 pip install statelet
 ```
 
-That installs three executables onto your `PATH` —
+Then bring a local cluster up:
+
+```bash
+statelet-cluster start          # --nodes N, default 3
+statelet-cluster status
+statelet-cluster stop           # --clean also deletes the data directory
+```
+
+```python
+from statelet import Client
+c = Client("127.0.0.1:9379", username="admin", password="admin")
+c.put(b"hello", b"world")
+print(c.get(b"hello"))          # b'world'
+```
+
+Data and logs live under `~/.statelet/cluster`, or `$STATELET_DATA_DIR`.
+
+The individual executables are on your `PATH` too, for anyone driving them
+under systemd, Docker or a supervisor of their own —
 
 | Command | Role |
 |---|---|

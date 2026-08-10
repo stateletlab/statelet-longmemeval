@@ -60,8 +60,10 @@ and the shell driver for no functional gain.
 [`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml).
 
 **What the package is.** `statelet` on PyPI is the **server** distribution: the
-three Rust executables, plus console-script shims that exec them, under a
-`statelet_server` import package. The client library is *not* bundled — it is
+three Rust executables, the console-script shims that exec them, and
+`statelet-cluster` — a Python port of the engine's bash launcher, so
+`pip install statelet && statelet-cluster start` brings a local cluster up in
+one step on Windows as well — all under a `statelet_server` import package. The client library is *not* bundled — it is
 declared as a dependency on `statelet-sdk`, published from
 [stateletlab/statelet-sdk](https://github.com/stateletlab/statelet-sdk). So
 `pip install statelet` is still one step and still gives you both, while only
