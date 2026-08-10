@@ -15,7 +15,7 @@ That installs three executables onto your `PATH` —
 | `statelet-metadata` | metadata-plane Raft group |
 | `statelet-datanode` | data-plane storage engine |
 
-— and pulls in `statelet-client`, so `import statelet` works in the same
+— and pulls in `statelet-sdk`, so `import statelet` works in the same
 environment.
 
 Platform wheels are published for macOS (Apple Silicon and Intel), Linux

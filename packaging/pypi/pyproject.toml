@@ -25,7 +25,7 @@ classifiers = [
 # which keeps `pip install statelet` a single step while leaving exactly one
 # authoritative copy of the client code, in stateletlab/statelet-sdk.
 dependencies = [
-    "statelet-client>=0.1.1",
+    "statelet-sdk>=0.1.1",
 ]
 
 [project.scripts]

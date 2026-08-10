@@ -19,7 +19,7 @@ is not the engine repo.
 ```bash
 # 0. Install the Statelet Python client (`import statelet`; the harness will
 #    not start without it). `statelet` pulls it in and adds the server
-#    binaries; `statelet-client` is the client on its own. Either works here:
+#    binaries; `statelet-sdk` is the client on its own. Either works here:
 pip install statelet
 pip install -e /path/to/statelet-sdk/python
 
@@ -62,7 +62,7 @@ and the shell driver for no functional gain.
 **What the package is.** `statelet` on PyPI is the **server** distribution: the
 three Rust executables, plus console-script shims that exec them, under a
 `statelet_server` import package. The client library is *not* bundled — it is
-declared as a dependency on `statelet-client`, published from
+declared as a dependency on `statelet-sdk`, published from
 [stateletlab/statelet-sdk](https://github.com/stateletlab/statelet-sdk). So
 `pip install statelet` is still one step and still gives you both, while only
 one distribution owns the `statelet` import package.
@@ -119,7 +119,7 @@ which would need `musllinux` wheels, and Windows on ARM.
    `statelet-longmemeval`, workflow `publish-statelet-pypi.yml`, environment
    `pypi`. For the first ever release this is a *pending* publisher, created
    from the PyPI account page before the project exists.
-3. `statelet-client` published from `stateletlab/statelet-sdk`. Until it exists
+3. `statelet-sdk` published from `stateletlab/statelet-sdk`. Until it exists
    on PyPI, `pip install statelet` resolves the dependency and fails — publish
    the client first. (The build itself does not care: its smoke test installs
    with `--no-deps`.)
