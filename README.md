@@ -73,6 +73,7 @@ platform tag, then publishes the set. So the PyPI install gives you the SDK
 | `x86_64-apple-darwin` | `macos-14`, cross | `macosx_10_12_x86_64` |
 | `x86_64-unknown-linux-gnu` | `manylinux_2_28_x86_64` container | `manylinux_2_28_x86_64` |
 | `aarch64-unknown-linux-gnu` | `manylinux_2_28_aarch64` container on an ARM runner | `manylinux_2_28_aarch64` |
+| `x86_64-pc-windows-msvc` | `windows-latest` | `win_amd64` |
 
 **Why two Linux rows cover every distribution.** `manylinux` is a cross-distro
 ABI contract, not a distro: one `manylinux_2_28` wheel serves any glibc ≥ 2.28
@@ -86,11 +87,8 @@ build if they exceed what the tag claims, so the promise cannot silently rot.
 
 **What is not covered.** No sdist and no pure-Python fallback wheel are
 published, so anything outside the table gets "no matching distribution" and
-must install from a checkout. That means Alpine/musl, which would need
-`musllinux` wheels, and Windows — the latter is a port rather than a matrix
-row: the SIGTERM handlers in all three binaries, `fd_limit`'s `setrlimit`, and
-nine files' worth of `std::os::unix` have no Windows arm, and the engine
-carries exactly one `#[cfg(windows)]` block today.
+must install from a checkout. That leaves Alpine and other musl distributions,
+which would need `musllinux` wheels, and Windows on ARM.
 
 **One-time setup**, both on this repository:
 
