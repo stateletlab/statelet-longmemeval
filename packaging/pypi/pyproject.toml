@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "statelet"
+version = "0.1.1"
+description = "Statelet server binaries — agent memory with KV, vector search, and temporal causal graphs in one database"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+keywords = ["statelet", "agent", "memory", "vector", "graph", "database", "llm", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+]
+
+# The client library is not duplicated here. Two distributions cannot both own
+# the `statelet` import package: pip would let them overwrite each other's
+# files and uninstalling either would break the other. So `statelet` ships the
+# servers under `statelet_server` and pulls the client in as a dependency,
+# which keeps `pip install statelet` a single step while leaving exactly one
+# authoritative copy of the client code, in stateletlab/statelet-sdk.
+dependencies = [
+    "statelet-client>=0.1.1",
+]
+
+[project.scripts]
+statelet-gateway = "statelet_server._cli:gateway"
+statelet-metadata = "statelet_server._cli:metadata"
+statelet-datanode = "statelet_server._cli:datanode"
+
+[project.urls]
+Homepage = "https://statelet.com"
+Repository = "https://github.com/stateletlab/statelet"
+
+[tool.setuptools]
+packages = ["statelet_server", "statelet_server.bin"]
+
+[tool.setuptools.package-data]
+"statelet_server.bin" = ["*"]

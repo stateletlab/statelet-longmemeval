@@ -17,11 +17,11 @@ is not the engine repo.
 ## Quick start
 
 ```bash
-# 0. Install the Statelet Python SDK (six modules `import statelet`; the
-#    harness will not start without it) — from PyPI, which also brings the
-#    server binaries, or editable from a Statelet checkout:
+# 0. Install the Statelet Python client (`import statelet`; the harness will
+#    not start without it). `statelet` pulls it in and adds the server
+#    binaries; `statelet-client` is the client on its own. Either works here:
 pip install statelet
-pip install -e /path/to/statelet/sdk/python
+pip install -e /path/to/statelet-sdk/python
 
 # 1. Start a cluster (in the Statelet checkout — this also sets the ingest
 #    env vars described under Phase A below):
@@ -45,27 +45,41 @@ LME_STAGE=judge LME_DETAIL_LOG=path/to/detail.log \
 | `benches/longmemeval/` | The harness proper — ingest, query, judging, metrics, reporting. A Python package with **relative imports**, invoked as `python -m benches.longmemeval`. |
 | `eval/` | Standalone retrieval/answer harnesses (`longmemeval_retrieval_eval.py` and the per-model drivers) plus `sessiondoc_postprocess.py`, which imports the retrieval harness directly. Independent of the `benches/` package. |
 | `scripts/` | Shell driver for the full-500 run (`run-longmemeval-500.sh`). |
-| `.github/workflows/` | `publish-statelet-pypi.yml` — builds and publishes the `statelet` PyPI package from the engine repository. See [Publishing the SDK](#publishing-the-statelet-sdk-to-pypi). |
+| `.github/workflows/` | `publish-statelet-pypi.yml` — builds and publishes the `statelet` server wheel. See [Publishing](#publishing-the-statelet-server-wheel-to-pypi). |
+| `.github/scripts/` | `manylinux-build.sh` — the Linux half of that build, run inside a manylinux container. |
+| `packaging/pypi/` | The server wheel's packaging skeleton: `pyproject.toml`, the `statelet_server` package and its CLI shims. Binaries are dropped in at build time. |
 
 The `benches/` prefix is kept rather than flattened to a top-level
 `longmemeval/`: the package uses relative imports and every documented command
 is `python -m benches.longmemeval …`, so moving it would invalidate this README
 and the shell driver for no functional gain.
 
-## Publishing the `statelet` SDK to PyPI
+## Publishing the `statelet` server wheel to PyPI
 
 `pip install statelet` is served by
-[`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml),
-which lives here rather than in the engine repository: that repository is
-private, this one is public, and PyPI Trusted Publishing binds a project to one
-public workflow file.
+[`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml).
 
-The workflow checks out `stateletlab/statelet`, builds the Rust servers for
-four targets, copies `gateway` / `metadata_service` / `raft_engine` into
-`sdk/python/statelet/bin/` as `statelet-gateway` / `-metadata` / `-datanode`,
-builds a wheel per target and retags it from `py3-none-any` to the real
-platform tag, then publishes the set. So the PyPI install gives you the SDK
-**and** the servers — `statelet-gateway` on `$PATH` runs the bundled binary.
+**What the package is.** `statelet` on PyPI is the **server** distribution: the
+three Rust executables, plus console-script shims that exec them, under a
+`statelet_server` import package. The client library is *not* bundled — it is
+declared as a dependency on `statelet-client`, published from
+[stateletlab/statelet-sdk](https://github.com/stateletlab/statelet-sdk). So
+`pip install statelet` is still one step and still gives you both, while only
+one distribution owns the `statelet` import package.
+
+That split is not cosmetic. Two distributions cannot both ship `statelet/`:
+pip lets the second overwrite the first's files, and uninstalling either one
+then breaks the other. The dependency edge keeps a single authoritative copy of
+the client code in the SDK repository.
+
+**Where the pieces come from.** The wheel's packaging skeleton lives here, in
+[`packaging/pypi/`](packaging/pypi) — `pyproject.toml`, the `statelet_server`
+package and its CLI shims. The engine checkout contributes compiled binaries
+and nothing else, so the SDKs moving out of `stateletlab/statelet` cannot break
+this build. Per target the workflow drops `gateway` / `metadata_service` /
+`raft_engine` into `statelet_server/bin/` as `statelet-gateway` / `-metadata` /
+`-datanode`, builds a wheel, and retags it from `py3-none-any` to the real
+platform tag.
 
 | Target | Built on | Wheel tag |
 |---|---|---|
@@ -96,27 +110,39 @@ published, so anything outside the table gets "no matching distribution" and
 must install from a checkout. That leaves Alpine and other musl distributions,
 which would need `musllinux` wheels, and Windows on ARM.
 
-**One-time setup**, both on this repository:
+**One-time setup:**
 
-1. `secrets.STATELET_REPO_TOKEN` — a fine-grained PAT with `Contents: read` on
-   `stateletlab/statelet`, used only by `actions/checkout`.
-2. A GitHub environment named `pypi`, registered on PyPI as a Trusted Publisher
-   for project `statelet`: owner `stateletlab`, repository
+1. `secrets.STATELET_REPO_TOKEN` on this repository — a fine-grained PAT with
+   `Contents: read` on `stateletlab/statelet`, used only by `actions/checkout`.
+2. A GitHub environment named `pypi` here, registered on PyPI as a Trusted
+   Publisher for project `statelet`: owner `stateletlab`, repository
    `statelet-longmemeval`, workflow `publish-statelet-pypi.yml`, environment
    `pypi`. For the first ever release this is a *pending* publisher, created
    from the PyPI account page before the project exists.
+3. `statelet-client` published from `stateletlab/statelet-sdk`. Until it exists
+   on PyPI, `pip install statelet` resolves the dependency and fails — publish
+   the client first. (The build itself does not care: its smoke test installs
+   with `--no-deps`.)
 
 **Running it.** Manually via *Actions → Publish statelet to PyPI → Run
 workflow*, taking a `ref` of the engine repository (default `main`), an
-optional `version` that rewrites `sdk/python/pyproject.toml`, and a `dry_run`
-box that builds and smoke-tests the wheels without publishing. Or automatically
-by pushing a `statelet-v<version>` tag here, which builds engine tag
-`<version>` — `statelet-v0.1.1` → `v0.1.1`.
+optional `version` override, and a `dry_run` box that builds and smoke-tests
+the wheels without publishing. Or automatically by pushing a
+`statelet-v<version>` tag here, which builds engine tag `<version>` —
+`statelet-v0.1.1` → `v0.1.1`.
 
-The version comes from `sdk/python/pyproject.toml` in the engine repository;
-publishing uses `skip-existing`, so re-running against a version already on
-PyPI is a no-op rather than an error. Keep the triggers as they are —
-`pull_request` would hand the private-repo token to fork contributors.
+The version comes from [`packaging/pypi/pyproject.toml`](packaging/pypi/pyproject.toml)
+unless overridden; publishing uses `skip-existing`, so re-running against a
+version already on PyPI is a no-op rather than an error. Keep the triggers as
+they are — `pull_request` would hand the private-repo token to fork
+contributors.
+
+**A note on the container build script.** The manylinux build lives in
+[`.github/scripts/manylinux-build.sh`](.github/scripts/manylinux-build.sh)
+rather than inline in the workflow. It was inline once, inside
+`docker run ... bash -c '...'`, and a single apostrophe in a comment closed the
+quote early and silently ran the rest of the script *on the host* — where the
+failure surfaced as `yum: command not found`. A file has no such failure mode.
 
 ## The three phases, and who owns each
 

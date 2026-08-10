@@ -27,7 +27,7 @@ on:
         required: false
         default: main
       version:
-        description: "Override the version in sdk/python/pyproject.toml (blank = use as-is)"
+        description: "Override the wheel version (blank = use packaging/pypi/pyproject.toml as-is)"
         required: false
         default: ""
       dry_run:
@@ -141,6 +141,14 @@ jobs:
             exit 1
           fi
 
+      # This repository carries the wheel's packaging skeleton and the
+      # container build script; the engine supplies only compiled binaries.
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          path: lme
+          persist-credentials: false
+
       - name: Checkout stateletlab/statelet
         uses: actions/checkout@v4
         with:
@@ -175,21 +183,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Apply version override
-        if: inputs.version != ''
-        run: |
-          python - <<'PY'
-          import re, pathlib, os
-          p = pathlib.Path("sdk/python/pyproject.toml")
-          s = p.read_text()
-          s, n = re.subn(r'(?m)^version = ".*"$',
-                         'version = "%s"' % os.environ["NEW_VERSION"], s, count=1)
-          assert n == 1, "no version line found in sdk/python/pyproject.toml"
-          p.write_text(s)
-          PY
-        env:
-          NEW_VERSION: ${{ inputs.version }}
-
       # --locked: build exactly the graph in the engine's committed Cargo.lock.
       # Without it a floating dependency can pick up a newer release than the
       # one that was tested and fail here (ort rc.12 -> rc.13 did exactly that),
@@ -212,123 +205,53 @@ jobs:
             -e CARGO_TERM_COLOR=always \
             -e TARGET="$TARGET" \
             "$BUILD_IMAGE" \
-            bash -euo pipefail -c '
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal --default-toolchain stable --target "$TARGET"
-              export PATH="$CARGO_HOME/bin:$PATH"
+            bash /work/lme/.github/scripts/manylinux-build.sh
 
-              # librocksdb-sys drives bindgen, which needs a real libclang.so.
-              # Note manylinux-install-clang is no use here: it installs a
-              # *static* toolchain — /opt/clang/bin/clang and friends, no
-              # shared library at all.
-              #
-              # SCL llvm-toolset first: CentOS 7 base clang is 3.4, far below
-              # what bindgen accepts, but the image already has the SCL repos
-              # wired up because its devtoolset gcc comes from them, and
-              # llvm-toolset-7.0 carries a matching libclang plus its resource
-              # headers. The libclang wheel is the fallback, with the resource
-              # headers borrowed from the static toolchain.
-              find_libclang() { find /usr /opt -name "libclang.so*" 2>/dev/null | head -1; }
-
-              LIBCLANG="$(find_libclang)"
-              if [ -z "$LIBCLANG" ]; then
-                echo "--- no libclang in the image; trying SCL llvm-toolset"
-                yum -y install llvm-toolset-7.0-clang || true
-                LIBCLANG="$(find_libclang)"
-              fi
-              if [ -z "$LIBCLANG" ]; then
-                echo "--- SCL did not provide one; falling back to the libclang wheel"
-                /opt/python/cp312-cp312/bin/pip install --quiet libclang || true
-                LIBCLANG="$(find / -xdev -name "libclang.so*" 2>/dev/null | head -1)"
-                # That wheel ships the library without the builtin headers, so
-                # bindgen would fail on stddef.h; take those from static clang.
-                manylinux-install-clang || true
-                RESOURCE_DIR="$(find /opt/clang/lib/clang -maxdepth 2 -name include -type d 2>/dev/null | head -1)"
-                if [ -n "$RESOURCE_DIR" ]; then
-                  export BINDGEN_EXTRA_CLANG_ARGS="-I$RESOURCE_DIR"
-                  echo "bindgen resource dir: $RESOURCE_DIR"
-                fi
-              fi
-              if [ -z "$LIBCLANG" ]; then
-                echo "::error::no libclang.so anywhere in the image"
-                find / -xdev -name "*clang*" -maxdepth 6 2>/dev/null | head -40
-                exit 1
-              fi
-              export LIBCLANG_PATH="$(dirname "$LIBCLANG")"
-              echo "libclang: $LIBCLANG"
-
-              # Hand openssl-sys a static OpenSSL of our own.
-              #
-              # The engine asks for openssl with `vendored`, but that is not
-              # the copy that matters here. ort's default features include
-              # tls-native, which drags ort-sys -> ureq -> native-tls ->
-              # openssl-sys into the *build-script* graph, and under edition
-              # 2024's resolver those features do not unify with the ordinary
-              # dependency graph. That copy resolves to plain `default`, has
-              # no vendored path compiled in, and goes looking for a system
-              # OpenSSL. `--features openssl/vendored` cannot reach it.
-              #
-              # macOS never hit this because native-tls uses Security.framework
-              # there, and a bare ubuntu runner never hit it because libssl-dev
-              # is installed. Only a clean container exposes it.
-              #
-              # Static, and built here, for two reasons: libssl is not on the
-              # manylinux allowlist, so a dynamic link would leave the wheel
-              # depending on a library the installing machine may not have;
-              # and CentOS 7 ships OpenSSL 1.0.2, which openssl-sys 0.9 no
-              # longer supports at all.
-              #
-              # The tidier fix lives in the engine — ort with
-              # default-features = false would drop ureq, native-tls and this
-              # whole second openssl-sys, since load-dynamic makes the binary
-              # download pointless — but that is a manifest change to make
-              # deliberately, not a side effect of a packaging workflow.
-              yum -y install perl-core perl-IPC-Cmd
-              curl -fsSL --retry 5 -o /tmp/openssl.tar.gz \
-                https://github.com/openssl/openssl/releases/download/openssl-3.0.16/openssl-3.0.16.tar.gz
-              mkdir -p /tmp/openssl-src
-              tar -C /tmp/openssl-src --strip-components=1 -xzf /tmp/openssl.tar.gz
-              ( cd /tmp/openssl-src
-                ./Configure --prefix=/opt/openssl-static --openssldir=/opt/openssl-static \
-                  no-shared no-tests >/dev/null
-                make -j"$(nproc)" >/dev/null
-                make install_sw >/dev/null )
-              export OPENSSL_DIR=/opt/openssl-static
-              export OPENSSL_STATIC=1
-              export OPENSSL_NO_VENDOR=0
-              echo "static openssl: $("/opt/openssl-static/bin/openssl" version)"
-
-              echo "--- cargo: $(cargo --version) / $(rustc --version)"
-              echo "--- what enables openssl-sys here:"
-              cargo fetch --locked >/dev/null 2>&1 || true
-              cargo tree --locked --offline --features data-node,agent-state \
-                --target "$TARGET" -i openssl-sys -e features 2>&1 | head -25 || true
-
-              cargo build --locked --release \
-                --features data-node,agent-state \
-                --target "$TARGET"
-            '
-
-      - name: Stage binaries into the SDK
+      # The wheel source is this repository's packaging skeleton, not anything
+      # from the engine checkout — the engine contributes compiled binaries and
+      # nothing else, so moving its SDKs out to stateletlab/statelet-sdk cannot
+      # break this build.
+      - name: Assemble the wheel source tree
+        working-directory: .
         run: |
           set -euo pipefail
           case "$RUNNER_OS" in Windows) EXE=".exe" ;; *) EXE="" ;; esac
-          TARGET_DIR="target/${{ matrix.target }}/release"
-          BIN_DIR="sdk/python/statelet/bin"
-          mkdir -p "$BIN_DIR"
+          rm -rf wheel-src
+          cp -R lme/packaging/pypi wheel-src
+
+          TARGET_DIR="statelet/target/${{ matrix.target }}/release"
+          BIN_DIR="wheel-src/statelet_server/bin"
           cp "$TARGET_DIR/metadata_service$EXE" "$BIN_DIR/statelet-metadata$EXE"
           cp "$TARGET_DIR/raft_engine$EXE"      "$BIN_DIR/statelet-datanode$EXE"
           cp "$TARGET_DIR/gateway$EXE"          "$BIN_DIR/statelet-gateway$EXE"
           chmod +x "$BIN_DIR"/statelet-*
+          ls -lh "$BIN_DIR"
+
+      - name: Apply version override
+        if: inputs.version != ''
+        working-directory: .
+        env:
+          NEW_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os, pathlib, re
+          p = pathlib.Path("wheel-src/pyproject.toml")
+          s = p.read_text()
+          s, n = re.subn(r'(?m)^version = ".*"$',
+                         'version = "%s"' % os.environ["NEW_VERSION"], s, count=1)
+          assert n == 1, "no version line found in packaging/pypi/pyproject.toml"
+          p.write_text(s)
+          PY
 
       # The platform tag is a promise to pip, and pip enforces nothing at
       # install time — an over-claimed glibc floor surfaces as a runtime
       # "GLIBC_x.y not found" on the user's machine. Break the build instead.
       - name: Verify the glibc floor matches the wheel tag
         if: matrix.glibc_max != ''
+        working-directory: .
         run: |
           set -euo pipefail
-          need="$(for b in sdk/python/statelet/bin/statelet-*; do
+          need="$(for b in wheel-src/statelet_server/bin/statelet-*; do
                     objdump -T "$b" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' || true
                   done | sort -uV | tail -1)"
           need="${need#GLIBC_}"
@@ -341,11 +264,12 @@ jobs:
           fi
 
       - name: Build wheel
+        working-directory: .
         run: |
           set -euo pipefail
           python -m pip install --upgrade build wheel setuptools
 
-          cd sdk/python
+          cd wheel-src
           python -m build --wheel --no-isolation
 
           # setuptools produces py3-none-any because the payload is data files,
@@ -365,24 +289,25 @@ jobs:
 
       - name: Smoke-test the wheel
         if: matrix.native == 'yes'
+        working-directory: .
         run: |
           set -euo pipefail
-          # Windows venvs put the interpreter in Scripts/, not bin/. The venv
-          # goes beside the checkout rather than under $RUNNER_TEMP, whose
-          # backslashed value does not survive Git Bash path handling.
+          # Windows venvs put the interpreter in Scripts/, not bin/.
           case "$RUNNER_OS" in Windows) VBIN="Scripts" ;; *) VBIN="bin" ;; esac
-          python -m venv ../smoke-venv
-          V="../smoke-venv/$VBIN"
+          python -m venv smoke-venv
+          V="smoke-venv/$VBIN"
           "$V/python" -m pip install --upgrade pip
-          "$V/python" -m pip install sdk/python/dist/*.whl
-          "$V/python" -c "import statelet; print('statelet', statelet.__file__)"
-          "$V/python" -c "from statelet import statelet_pb2, statelet_pb2_grpc"
-          # The `statelet-gateway`/`-metadata`/`-datanode` console scripts are
-          # thin shims that exec these files; if the retag/copy dance dropped
-          # them the wheel is useless, so fail the build rather than ship it.
+          # --no-deps: this checks the wheel we just built, not PyPI's copy of
+          # statelet-client, which the dependency would otherwise drag in (and
+          # which does not exist yet on a first release).
+          "$V/python" -m pip install --no-deps wheel-src/dist/*.whl
+          "$V/python" -c "import statelet_server; print(statelet_server.__file__)"
+          # The console scripts are thin shims that exec these files; if the
+          # retag/copy dance dropped them the wheel is useless, so fail the
+          # build rather than ship it.
           "$V/python" - <<'PY'
-          import os, sys, statelet
-          bindir = os.path.join(os.path.dirname(statelet.__file__), "bin")
+          import os, sys, statelet_server
+          bindir = os.path.join(os.path.dirname(statelet_server.__file__), "bin")
           found = [f for f in os.listdir(bindir) if f.startswith("statelet-")]
           # Windows wheels carry the .exe suffix; compare on the bare stem.
           present = sorted(os.path.splitext(f)[0] if f.endswith(".exe") else f for f in found)
@@ -390,6 +315,10 @@ jobs:
           missing = {"statelet-gateway", "statelet-metadata", "statelet-datanode"} - set(present)
           if missing:
               sys.exit("missing from wheel: %s" % sorted(missing))
+          for name in sorted(present):
+              resolved = statelet_server.binary_path(name)
+              if not os.path.isfile(resolved):
+                  sys.exit("binary_path() does not resolve: %s -> %s" % (name, resolved))
           if os.name != "nt":
               for f in found:
                   if not os.access(os.path.join(bindir, f), os.X_OK):
@@ -399,7 +328,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.target }}
-          path: statelet/sdk/python/dist/*.whl
+          path: wheel-src/dist/*.whl
           if-no-files-found: error
 
   publish:
