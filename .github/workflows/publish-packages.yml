@@ -310,6 +310,8 @@ jobs:
   package-msi:
     needs: build
     runs-on: windows-latest
+    outputs:
+      product_code: ${{ steps.msi.outputs.product_code }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -332,6 +334,7 @@ jobs:
         run: dotnet tool install -g wix --version 5.*
 
       - name: Build .msi
+        id: msi
         shell: pwsh
         env:
           VERSION: ${{ inputs.version }}
@@ -342,6 +345,20 @@ jobs:
             -o "statelet-$env:VERSION-windows-amd64.msi" `
             statelet/packaging/windows/installer.wxs
           Get-ChildItem *.msi
+
+          # winget wants the ProductCode, and WiX mints a fresh one per build,
+          # so read it back out of the package rather than pinning a guess.
+          $msi = (Resolve-Path "statelet-$env:VERSION-windows-amd64.msi").Path
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.GetType().InvokeMember(
+            "OpenDatabase", "InvokeMethod", $null, $installer, @($msi, 0))
+          $view = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db,
+            @("SELECT Value FROM Property WHERE Property = 'ProductCode'"))
+          $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+          $rec = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+          $code = $rec.GetType().InvokeMember("StringData", "GetProperty", $null, $rec, 1)
+          Write-Host "ProductCode: $code"
+          "product_code=$code" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - uses: actions/upload-artifact@v4
         with:
@@ -495,7 +512,7 @@ jobs:
           echo "::warning::TAP_GITHUB_TOKEN is unset and stateletlab/homebrew-statelet may not exist; formula built but not pushed"
 
   publish-winget:
-    needs: release
+    needs: [release, package-msi]
     if: ${{ !inputs.dry_run }}
     runs-on: windows-latest
     env:
@@ -518,8 +535,10 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ inputs.version }}
+          PRODUCT_CODE: ${{ needs.package-msi.outputs.product_code }}
         run: |
           set -euo pipefail
+          test -n "$PRODUCT_CODE" || { echo "::error::no ProductCode from package-msi"; exit 1; }
           MSI="dist/statelet-${VERSION}-windows-amd64.msi"
           test -f "$MSI"
           SHA="$(sha256sum "$MSI" | cut -d' ' -f1 | tr 'a-f' 'A-F')"
@@ -528,27 +547,40 @@ jobs:
           mkdir -p "$DIR"
 
           cat > "$DIR/stateletlab.Statelet.yaml" <<EOF
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
           PackageIdentifier: stateletlab.Statelet
           PackageVersion: ${VERSION}
           DefaultLocale: en-US
           ManifestType: version
-          ManifestVersion: 1.6.0
+          ManifestVersion: 1.12.0
           EOF
 
           cat > "$DIR/stateletlab.Statelet.installer.yaml" <<EOF
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
           PackageIdentifier: stateletlab.Statelet
           PackageVersion: ${VERSION}
-          InstallerType: wix
           InstallerLocale: en-US
+          InstallModes:
+            - interactive
+            - silent
+            - silentWithProgress
+          UpgradeBehavior: install
+          Commands:
+            - statelet-cli
+            - statelet-gateway
           Installers:
             - Architecture: x64
+              InstallerType: wix
+              Scope: machine
               InstallerUrl: ${URL}
               InstallerSha256: ${SHA}
+              ProductCode: '${PRODUCT_CODE}'
           ManifestType: installer
-          ManifestVersion: 1.6.0
+          ManifestVersion: 1.12.0
           EOF
 
           cat > "$DIR/stateletlab.Statelet.locale.en-US.yaml" <<EOF
+          # yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
           PackageIdentifier: stateletlab.Statelet
           PackageVersion: ${VERSION}
           PackageLocale: en-US
@@ -570,7 +602,7 @@ jobs:
             - graph
             - rust
           ManifestType: defaultLocale
-          ManifestVersion: 1.6.0
+          ManifestVersion: 1.12.0
           EOF
 
           echo "--- manifests"
