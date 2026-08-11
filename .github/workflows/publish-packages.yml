@@ -462,17 +462,32 @@ jobs:
           FORMULA
           cat Formula/statelet.rb
 
+      # Plain git rather than a third-party push action. The one this used
+      # read its credential from API_TOKEN_GITHUB while the job exported
+      # TAP_TOKEN — renaming the variable to gate the step on it left the
+      # action with nothing, and it failed with "API_TOKEN_GITHUB and
+      # SSH_DEPLOY_KEY are empty". Ten lines of git have no such coupling, and
+      # a token with write access to the tap no longer passes through an
+      # action pinned to a moving `main`.
       - name: Push formula to the tap
         if: env.TAP_TOKEN != ''
-        uses: cpina/github-action-push-to-another-repository@main
-        with:
-          source-directory: Formula
-          destination-github-username: stateletlab
-          destination-repository-name: homebrew-statelet
-          target-directory: Formula
-          user-email: ci@statelet.ai
-          user-name: statelet-ci
-          commit-message: "statelet ${{ inputs.version }}"
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/stateletlab/homebrew-statelet.git" tap
+          mkdir -p tap/Formula
+          cp Formula/statelet.rb tap/Formula/statelet.rb
+          cd tap
+          git config user.name  "statelet-ci"
+          git config user.email "ci@statelet.ai"
+          git add Formula/statelet.rb
+          if git diff --cached --quiet; then
+            echo "formula unchanged; nothing to push"
+            exit 0
+          fi
+          git commit -qm "statelet ${{ inputs.version }}"
+          git push
+          echo "pushed Formula/statelet.rb to stateletlab/homebrew-statelet"
 
       - name: Tap not configured
         if: env.TAP_TOKEN == ''
