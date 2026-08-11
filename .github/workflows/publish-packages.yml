@@ -323,9 +323,13 @@ jobs:
           name: binaries-windows-amd64
           path: dl
 
+      # Pinned to v5. `dotnet tool install -g wix` now resolves to v7, which
+      # refuses to build anything until you accept the Open Source Maintenance
+      # Fee EULA — `error WIX7015`. v5 is MIT-licensed and speaks the same v4
+      # schema this installer is written against.
       - name: Install WiX
         shell: pwsh
-        run: dotnet tool install -g wix
+        run: dotnet tool install -g wix --version 5.*
 
       - name: Build .msi
         shell: pwsh

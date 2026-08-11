@@ -80,8 +80,10 @@ POSTRM
 
 chmod 755 "$PKG/DEBIAN/postinst" "$PKG/DEBIAN/prerm" "$PKG/DEBIAN/postrm"
 
+# dpkg-deb names the output after the directory, which is already
+# statelet_<version>_<arch> — the `mv` this used to carry moved the file onto
+# itself and failed the build.
 dpkg-deb --build --root-owner-group "$PKG"
-mv "${PKG}.deb" "statelet_${VERSION}_${ARCH}.deb"
 
 echo "--- built statelet_${VERSION}_${ARCH}.deb"
 dpkg-deb --info "statelet_${VERSION}_${ARCH}.deb"

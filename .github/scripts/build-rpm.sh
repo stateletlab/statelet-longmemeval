@@ -2,6 +2,12 @@
 #
 # Builds one statelet .rpm from an unpacked stage directory.
 #
+# The payload is staged outside the buildroot and copied in by %install.
+# Staging directly into BUILDROOT does not work: rpmbuild runs
+# %__spec_install_pre before %install, which wipes the buildroot, so the files
+# are gone by the time %files looks for them and every entry fails with
+# "File not found".
+#
 # Unlike dpkg-deb, rpmbuild scans the payload and generates
 # `libc.so.6(GLIBC_2.x)` requires by itself, so the glibc floor does not have to
 # be declared here — it is read back out of the binaries instead.
@@ -9,25 +15,25 @@
 # Env:
 #   VERSION    package version, no leading v
 #   ARCH       rpm architecture (x86_64 | aarch64)
-#   STAGE_DIR  directory holding the binaries
+#   STAGE_DIR  directory holding the binaries and the built admin UI
 #   UNIT_FILE  path to the systemd unit
 set -euo pipefail
 
 : "${VERSION:?}" "${ARCH:?}" "${STAGE_DIR:?}" "${UNIT_FILE:?}"
 
 TOP="$PWD/rpmbuild"
-BUILDROOT="$TOP/BUILDROOT/statelet-${VERSION}-1.${ARCH}"
-rm -rf "$TOP"
-mkdir -p "$TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-mkdir -p "$BUILDROOT/usr/bin" "$BUILDROOT/usr/lib/systemd/system" \
-         "$BUILDROOT/var/lib/statelet" "$BUILDROOT/usr/share/statelet"
+PAYLOAD="$PWD/rpm-payload"
+rm -rf "$TOP" "$PAYLOAD"
+mkdir -p "$TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+mkdir -p "$PAYLOAD/usr/bin" "$PAYLOAD/usr/lib/systemd/system" \
+         "$PAYLOAD/var/lib/statelet" "$PAYLOAD/usr/share/statelet"
 
-cp "$STAGE_DIR"/statelet-* "$BUILDROOT/usr/bin/"
-chmod 755 "$BUILDROOT"/usr/bin/statelet-*
-cp "$UNIT_FILE" "$BUILDROOT/usr/lib/systemd/system/"
-# /usr/bin/statelet-gateway resolves the UI as ../share/statelet/ui
+cp "$STAGE_DIR"/statelet-* "$PAYLOAD/usr/bin/"
+chmod 755 "$PAYLOAD"/usr/bin/statelet-*
+cp "$UNIT_FILE" "$PAYLOAD/usr/lib/systemd/system/"
+# /usr/bin/statelet-gateway resolves the admin UI as ../share/statelet/ui
 if [ -d "$STAGE_DIR/ui" ]; then
-    cp -R "$STAGE_DIR/ui" "$BUILDROOT/usr/share/statelet/ui"
+    cp -R "$STAGE_DIR/ui" "$PAYLOAD/usr/share/statelet/ui"
 else
     echo "warning: no admin UI in $STAGE_DIR; the management port will serve 404s" >&2
 fi
@@ -49,7 +55,7 @@ Statelet is a distributed KV store in Rust with HNSW vector search,
 temporal graph engine, and Redis-compatible protocol support.
 
 %install
-# Files are already staged in BUILDROOT.
+cp -a %{_payload}/. %{buildroot}/
 
 %files
 /usr/bin/statelet-metadata
@@ -80,14 +86,15 @@ fi
 SPEC
 
 rpmbuild --define "_topdir $TOP" \
+         --define "_payload $PAYLOAD" \
          --define "_arch ${ARCH}" \
          --target "${ARCH}" \
          -bb "$TOP/SPECS/statelet.spec"
 
 cp "$TOP/RPMS/${ARCH}"/*.rpm .
 
-RPM="$(ls statelet-${VERSION}-1.${ARCH}.rpm)"
+RPM="statelet-${VERSION}-1.${ARCH}.rpm"
 echo "--- built $RPM"
 rpm -qip "$RPM"
-echo "--- generated requires (glibc floor should appear here):"
+echo "--- generated requires (the glibc floor should appear here):"
 rpm -qpR "$RPM"
