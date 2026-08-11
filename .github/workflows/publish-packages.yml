@@ -486,25 +486,97 @@ jobs:
     env:
       WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
     steps:
+      - uses: actions/download-artifact@v4
+        if: env.WINGET_TOKEN != ''
+        with:
+          name: msi-amd64
+          path: dist
+
+      # `wingetcreate update` only works once the package is already in
+      # winget-pkgs, and `new` is an interactive wizard with no flags for the
+      # identifier or version — neither can make the first submission from CI.
+      # So write the three manifests and hand them to `submit`, which takes a
+      # token and opens the pull request without a prompt. The same path serves
+      # every later release, so there is no first-time special case to forget.
       - name: Submit to winget-pkgs
         if: env.WINGET_TOKEN != ''
-        shell: pwsh
+        shell: bash
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/v$env:VERSION/statelet-$env:VERSION-windows-amd64.msi"
-          Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest" -OutFile wingetcreate.exe
-          .\wingetcreate.exe update `
-            --id stateletlab.Statelet `
-            --version $env:VERSION `
-            --urls $url `
-            --token $env:WINGET_TOKEN `
-            --submit
+          set -euo pipefail
+          MSI="dist/statelet-${VERSION}-windows-amd64.msi"
+          test -f "$MSI"
+          SHA="$(sha256sum "$MSI" | cut -d' ' -f1 | tr 'a-f' 'A-F')"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/statelet-${VERSION}-windows-amd64.msi"
+          DIR="manifests/s/stateletlab/Statelet/${VERSION}"
+          mkdir -p "$DIR"
+
+          cat > "$DIR/stateletlab.Statelet.yaml" <<EOF
+          PackageIdentifier: stateletlab.Statelet
+          PackageVersion: ${VERSION}
+          DefaultLocale: en-US
+          ManifestType: version
+          ManifestVersion: 1.6.0
+          EOF
+
+          cat > "$DIR/stateletlab.Statelet.installer.yaml" <<EOF
+          PackageIdentifier: stateletlab.Statelet
+          PackageVersion: ${VERSION}
+          InstallerType: wix
+          InstallerLocale: en-US
+          Installers:
+            - Architecture: x64
+              InstallerUrl: ${URL}
+              InstallerSha256: ${SHA}
+          ManifestType: installer
+          ManifestVersion: 1.6.0
+          EOF
+
+          cat > "$DIR/stateletlab.Statelet.locale.en-US.yaml" <<EOF
+          PackageIdentifier: stateletlab.Statelet
+          PackageVersion: ${VERSION}
+          PackageLocale: en-US
+          Publisher: stateletlab
+          PublisherUrl: https://github.com/stateletlab
+          PackageName: Statelet
+          PackageUrl: https://github.com/stateletlab/statelet
+          License: Apache-2.0
+          LicenseUrl: https://github.com/stateletlab/statelet/blob/main/LICENSE
+          ShortDescription: Distributed key-value storage engine with LSM-tree, Raft, and vector index
+          Description: >-
+            Statelet is a distributed KV store in Rust with HNSW vector search, a
+            temporal graph engine, and Redis-compatible protocol support. The
+            installer carries the server binaries, the CLI and the admin UI.
+          Tags:
+            - database
+            - key-value
+            - vector-search
+            - graph
+            - rust
+          ManifestType: defaultLocale
+          ManifestVersion: 1.6.0
+          EOF
+
+          echo "--- manifests"
+          for f in "$DIR"/*.yaml; do echo "== $f"; cat "$f"; done
+
+          curl -fsSL -o wingetcreate.exe https://aka.ms/wingetcreate/latest
+          # wingetcreate forks microsoft/winget-pkgs itself; the token needs the
+          # classic `public_repo` scope and nothing more.
+          ./wingetcreate.exe submit \
+            --token "$WINGET_TOKEN" \
+            --prtitle "New version: stateletlab.Statelet version ${VERSION}" \
+            --no-open \
+            "$DIR"
 
       - name: winget not configured
         if: env.WINGET_TOKEN == ''
         shell: bash
-        run: echo "::warning::WINGET_GITHUB_TOKEN is unset; skipping the winget-pkgs submission"
+        run: |
+          echo "::warning::WINGET_GITHUB_TOKEN is unset; skipping the winget-pkgs submission. \
+          It wants a classic PAT with the public_repo scope — wingetcreate forks winget-pkgs itself, \
+          so no fork has to exist beforehand."
 
   publish-apt-yum-repo:
     needs: release
