@@ -1,0 +1,6 @@
+Origin: Statelet
+Label: Statelet
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
