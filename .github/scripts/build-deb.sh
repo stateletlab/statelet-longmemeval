@@ -17,11 +17,19 @@ LICENSE_FILE="${LICENSE_FILE:-}"
 PKG="statelet_${VERSION}_${ARCH}"
 rm -rf "$PKG"
 mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/usr/lib/systemd/system" \
-         "$PKG/var/lib/statelet" "$PKG/usr/share/doc/statelet"
+         "$PKG/var/lib/statelet" "$PKG/usr/share/doc/statelet" \
+         "$PKG/usr/share/statelet"
 
 cp "$STAGE_DIR"/statelet-* "$PKG/usr/bin/"
 chmod 755 "$PKG"/usr/bin/statelet-*
 cp "$UNIT_FILE" "$PKG/usr/lib/systemd/system/"
+# The gateway resolves the admin UI relative to its own executable:
+# /usr/bin/statelet-gateway -> /usr/share/statelet/ui
+if [ -d "$STAGE_DIR/ui" ]; then
+    cp -R "$STAGE_DIR/ui" "$PKG/usr/share/statelet/ui"
+else
+    echo "warning: no admin UI in $STAGE_DIR; the management port will serve 404s" >&2
+fi
 if [ -n "$LICENSE_FILE" ] && [ -f "$LICENSE_FILE" ]; then
     cp "$LICENSE_FILE" "$PKG/usr/share/doc/statelet/copyright"
 else

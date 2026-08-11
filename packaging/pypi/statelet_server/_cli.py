@@ -3,8 +3,15 @@
 import os
 import subprocess
 import sys
+from typing import Optional
 
 _BIN_DIR = os.path.join(os.path.dirname(__file__), "bin")
+_UI_DIR = os.path.join(os.path.dirname(__file__), "ui")
+
+
+def ui_dir() -> Optional[str]:
+    """The bundled admin UI, or None if this wheel was built without one."""
+    return _UI_DIR if os.path.isfile(os.path.join(_UI_DIR, "index.html")) else None
 
 
 def binary_path(name: str) -> str:
@@ -27,6 +34,13 @@ def _exec(name: str) -> None:
 
 
 def gateway() -> None:
+    # The gateway serves the admin UI out of GATEWAY_UI_DIR, whose default is
+    # the relative path `ui/dist` — which resolves to nothing unless you happen
+    # to be standing in an engine checkout. Point it at the copy in this wheel,
+    # unless the caller has already chosen one.
+    bundled = ui_dir()
+    if bundled and not os.environ.get("GATEWAY_UI_DIR"):
+        os.environ["GATEWAY_UI_DIR"] = bundled
     _exec("statelet-gateway")
 
 

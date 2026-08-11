@@ -108,6 +108,22 @@ jobs:
           printf 'LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin\n' >> "$GITHUB_ENV"
           printf 'OPENSSL_SRC_PERL=C:\\Strawberry\\perl\\bin\\perl.exe\n' >> "$GITHUB_ENV"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Nothing in CI has ever built the admin UI, so no package has ever
+      # carried it and the management port served 404s everywhere.
+      - name: Build the admin UI
+        working-directory: statelet/ui
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -f dist/index.html || { echo "::error::UI build produced no index.html"; exit 1; }
+          du -sh dist
+
       - name: Install Rust
         if: matrix.build_image == ''
         uses: dtolnay/rust-toolchain@stable
@@ -157,7 +173,11 @@ jobs:
             cp statelet/scripts/statelet-cluster stage/statelet-cluster
           fi
           chmod +x stage/statelet-*
+          # The gateway looks for the admin UI next to its own executable, so
+          # `ui/` rides along with the binaries in every archive.
+          cp -R statelet/ui/dist stage/ui
           ls -lh stage
+          echo "admin UI: $(find stage/ui -type f | wc -l) files"
 
       # Same contract as the wheel's platform tag: a package that installs and
       # then cannot start is worse than one that refuses to install, so the
@@ -412,6 +432,9 @@ jobs:
               bin.install "statelet-gateway"
               bin.install "statelet-cli"
               bin.install "statelet-cluster"
+              # The gateway resolves the admin UI as ../share/statelet/ui from
+              # its own location, so this is the path it will look in.
+              (pkgshare/"ui").install Dir["ui/*"]
             end
 
             def post_install

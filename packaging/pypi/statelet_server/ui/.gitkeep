@@ -1,0 +1,3 @@
+The built admin UI is copied here at build time from the engine's ui/dist
+(see .github/workflows/publish-statelet-pypi.yml). It is not checked in:
+it is a build artifact of a Vite project that lives in the engine repository.

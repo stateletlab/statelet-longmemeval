@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ._cli import binary_path
+from ._cli import binary_path, ui_dir
 
 METADATA_PORT = 8379
 GATEWAY_PORT = 9379
@@ -218,6 +218,9 @@ def do_start(nodes: int) -> int:
         "GATEWAY_JWT_SECRET": os.environ.get("GATEWAY_JWT_SECRET", "dev-secret"),
         "GATEWAY_USERS": os.environ.get("GATEWAY_USERS", "admin:admin:admin"),
         "METRICS_ADDR": "127.0.0.1:9095",
+        # Without this the gateway looks for the admin UI at the relative path
+        # `ui/dist` and serves 404s for every page.
+        "GATEWAY_UI_DIR": os.environ.get("GATEWAY_UI_DIR") or (ui_dir() or ""),
     }, root)
     if not _wait_for_port(GATEWAY_PORT, 20, "gateway"):
         print(f"  see {root / 'logs' / 'gateway.log'}", file=sys.stderr)
@@ -227,7 +230,7 @@ def do_start(nodes: int) -> int:
 Statelet is up.
 
   gRPC        127.0.0.1:{GATEWAY_PORT}
-  management  http://127.0.0.1:{GATEWAY_MGMT_PORT}
+  admin UI    http://127.0.0.1:{GATEWAY_MGMT_PORT}
   redis       127.0.0.1:{GATEWAY_REDIS_PORT}
   data        {root}
   logs        {root / 'logs'}

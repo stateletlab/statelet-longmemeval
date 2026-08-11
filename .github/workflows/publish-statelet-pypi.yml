@@ -175,6 +175,11 @@ jobs:
           workspaces: statelet
           key: ${{ matrix.target }}
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       # The wheel is assembled on the host on every row — it is a zip of files
       # whose contents do not depend on which interpreter packed them, and the
       # platform tag is set by hand below.
@@ -187,6 +192,19 @@ jobs:
       # Without it a floating dependency can pick up a newer release than the
       # one that was tested and fail here (ort rc.12 -> rc.13 did exactly that),
       # or worse, publish a wheel built from an untested graph.
+      # The admin UI is a Vite app in the engine repository that nothing has
+      # ever built in CI. Without it the gateway's management port answers 404
+      # for every page, because GATEWAY_UI_DIR defaults to the relative path
+      # `ui/dist` and no packaged install has such a directory. 207 KB built.
+      - name: Build the admin UI
+        working-directory: statelet/ui
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -f dist/index.html || { echo "::error::UI build produced no index.html"; exit 1; }
+          du -sh dist
+
       - name: Build Rust binaries
         if: matrix.build_image == ''
         run: cargo build --locked --release --features data-node,agent-state --target ${{ matrix.target }}
@@ -226,6 +244,12 @@ jobs:
           cp "$TARGET_DIR/gateway$EXE"          "$BIN_DIR/statelet-gateway$EXE"
           chmod +x "$BIN_DIR"/statelet-*
           ls -lh "$BIN_DIR"
+
+          UI_DIR="wheel-src/statelet_server/ui"
+          rm -rf "$UI_DIR" && mkdir -p "$UI_DIR"
+          cp -R statelet/ui/dist/. "$UI_DIR"/
+          test -f "$UI_DIR/index.html"
+          echo "admin UI staged:"; find "$UI_DIR" -type f | head
 
       - name: Apply version override
         if: inputs.version != ''
@@ -323,6 +347,18 @@ jobs:
               for f in found:
                   if not os.access(os.path.join(bindir, f), os.X_OK):
                       sys.exit("not executable in wheel: %s" % f)
+
+          # The admin UI has to survive packaging too — it is the thing a user
+          # sees on the management port, and a wheel without it serves 404s
+          # while looking perfectly healthy otherwise.
+          ui = statelet_server.ui_dir()
+          if ui is None:
+              sys.exit("the admin UI is missing from this wheel")
+          assets = os.path.join(ui, "assets")
+          n = len(os.listdir(assets)) if os.path.isdir(assets) else 0
+          print("admin UI:", ui, "(%d asset files)" % n)
+          if n == 0:
+              sys.exit("the admin UI has no assets; the Vite build produced nothing")
           PY
 
       - uses: actions/upload-artifact@v4

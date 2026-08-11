@@ -60,10 +60,19 @@ and the shell driver for no functional gain.
 [`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml).
 
 **What the package is.** `statelet` on PyPI is the **server** distribution: the
-three Rust executables, the console-script shims that exec them, and
+three Rust executables, the console-script shims that exec them,
 `statelet-cluster` — a Python port of the engine's bash launcher, so
 `pip install statelet && statelet-cluster start` brings a local cluster up in
-one step on Windows as well — all under a `statelet_server` import package. The client library is *not* bundled — it is
+one step on Windows as well — and the built admin UI, all under a
+`statelet_server` import package.
+
+**The admin UI.** It is a Vite app in the engine repository that no CI job had
+ever built, so no channel shipped it, and every packaged install answered 404
+on the management port while its JSON API worked — the UI looked absent rather
+than unbuilt. Both workflows now build it and place it where the gateway looks:
+inside the wheel for pip, `/usr/share/statelet/ui` for deb and rpm, beside the
+binaries in the tarballs, `pkgshare/ui` for Homebrew. It costs 207 KB against a
+30 MB binary. The client library is *not* bundled — it is
 declared as a dependency on `statelet-sdk`, published from
 [stateletlab/statelet-sdk](https://github.com/stateletlab/statelet-sdk). So
 `pip install statelet` is still one step and still gives you both, while only

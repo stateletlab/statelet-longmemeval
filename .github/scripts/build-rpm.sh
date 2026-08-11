@@ -19,11 +19,18 @@ TOP="$PWD/rpmbuild"
 BUILDROOT="$TOP/BUILDROOT/statelet-${VERSION}-1.${ARCH}"
 rm -rf "$TOP"
 mkdir -p "$TOP"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-mkdir -p "$BUILDROOT/usr/bin" "$BUILDROOT/usr/lib/systemd/system" "$BUILDROOT/var/lib/statelet"
+mkdir -p "$BUILDROOT/usr/bin" "$BUILDROOT/usr/lib/systemd/system" \
+         "$BUILDROOT/var/lib/statelet" "$BUILDROOT/usr/share/statelet"
 
 cp "$STAGE_DIR"/statelet-* "$BUILDROOT/usr/bin/"
 chmod 755 "$BUILDROOT"/usr/bin/statelet-*
 cp "$UNIT_FILE" "$BUILDROOT/usr/lib/systemd/system/"
+# /usr/bin/statelet-gateway resolves the UI as ../share/statelet/ui
+if [ -d "$STAGE_DIR/ui" ]; then
+    cp -R "$STAGE_DIR/ui" "$BUILDROOT/usr/share/statelet/ui"
+else
+    echo "warning: no admin UI in $STAGE_DIR; the management port will serve 404s" >&2
+fi
 
 cat > "$TOP/SPECS/statelet.spec" <<SPEC
 Name:    statelet
@@ -51,6 +58,7 @@ temporal graph engine, and Redis-compatible protocol support.
 /usr/bin/statelet-cli
 /usr/bin/statelet-cluster
 /usr/lib/systemd/system/statelet.service
+/usr/share/statelet/ui
 %dir /var/lib/statelet
 
 %post

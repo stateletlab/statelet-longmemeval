@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "statelet"
-version = "0.1.2"
+version = "0.1.3"
 description = "Statelet server binaries — agent memory with KV, vector search, and temporal causal graphs in one database"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -43,3 +43,6 @@ packages = ["statelet_server", "statelet_server.bin"]
 
 [tool.setuptools.package-data]
 "statelet_server.bin" = ["*"]
+# The built admin UI. Vite emits index.html plus a hashed assets/ tree, so this
+# has to be recursive rather than a flat glob.
+"statelet_server" = ["ui/**/*"]

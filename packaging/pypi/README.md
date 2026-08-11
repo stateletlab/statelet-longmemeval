@@ -22,6 +22,10 @@ c.put(b"hello", b"world")
 print(c.get(b"hello"))          # b'world'
 ```
 
+Then open the admin UI at **http://127.0.0.1:9380** — cluster, databases, KV
+and graph consoles, users, metrics. It is served by the gateway out of this
+package; nothing else to install or configure.
+
 Data and logs live under `~/.statelet/cluster`, or `$STATELET_DATA_DIR`.
 
 The individual executables are on your `PATH` too, for anyone driving them
