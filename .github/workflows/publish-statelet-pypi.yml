@@ -254,9 +254,16 @@ jobs:
       # Without it a floating dependency can pick up a newer release than the
       # one that was tested and fail here (ort rc.12 -> rc.13 did exactly that),
       # or worse, publish a build from an untested graph.
+      #
+      # Both workspace packages, explicitly: the EE extraction moved the
+      # cluster binaries (metadata_service, raft_engine, gateway, plus the new
+      # statelet-admin) into the ee/ member, and a bare `cargo build` at the
+      # workspace root builds only the root package — the compile then
+      # succeeds while producing none of the binaries this workflow ships.
+      # statelet-cli still comes from the root package.
       - name: Build Rust binaries
         if: matrix.build_image == ''
-        run: cargo build --locked --release --features data-node,agent-state --target ${{ matrix.target }}
+        run: cargo build --locked --release -p statelet -p statelet-ee --features data-node,agent-state --target ${{ matrix.target }}
 
       - name: Build Rust binaries (manylinux container)
         if: matrix.build_image != ''
@@ -271,6 +278,7 @@ jobs:
             -e CARGO_HOME=/work/.cargo-home \
             -e CARGO_TERM_COLOR=always \
             -e TARGET="$TARGET" \
+            -e CARGO_EXTRA_ARGS="-p statelet -p statelet-ee" \
             "$BUILD_IMAGE" \
             bash /work/lme/.github/scripts/manylinux-build.sh
 
@@ -287,6 +295,9 @@ jobs:
           cp "$SRC/raft_engine$EXE"      "stage/statelet-datanode$EXE"
           cp "$SRC/gateway$EXE"          "stage/statelet-gateway$EXE"
           cp "$SRC/statelet-cli$EXE"     "stage/statelet-cli$EXE"
+          # The enterprise ops CLI (online backup / offline restore) that the
+          # ee/ split introduced; it belongs with the cluster binaries.
+          cp "$SRC/statelet-admin$EXE"   "stage/statelet-admin$EXE"
           # A shell driver, so Windows has no use for it.
           if [ "$RUNNER_OS" != "Windows" ]; then
             cp statelet/scripts/statelet-cluster stage/statelet-cluster
@@ -309,7 +320,8 @@ jobs:
         run: |
           set -euo pipefail
           need="$(for b in stage/statelet-metadata stage/statelet-datanode \
-                           stage/statelet-gateway stage/statelet-cli; do
+                           stage/statelet-gateway stage/statelet-cli \
+                           stage/statelet-admin; do
                     objdump -T "$b" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' || true
                   done | sort -uV | tail -1)"
           need="${need#GLIBC_}"
@@ -730,6 +742,7 @@ jobs:
               bin.install "statelet-datanode"
               bin.install "statelet-gateway"
               bin.install "statelet-cli"
+              bin.install "statelet-admin"
               bin.install "statelet-cluster"
               # The gateway resolves the admin UI as ../share/statelet/ui from
               # its own location, so this is the path it will look in.
