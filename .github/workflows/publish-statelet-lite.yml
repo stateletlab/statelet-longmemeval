@@ -52,7 +52,7 @@
 # Note: the engine source is private. Manual/tag triggers only — never
 # `pull_request`, which would expose the token to fork contributors.
 
-name: Publish statelet-lite (single binary)
+name: Publish statelet-lite (single binary PyPI/apt/yum/brew/winget)
 
 on:
   workflow_dispatch:
