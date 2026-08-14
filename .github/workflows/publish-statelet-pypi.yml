@@ -39,7 +39,7 @@
 # only — never `pull_request`, which would expose the token and the build log to
 # fork contributors.
 
-name: Publish statelet (PyPI + apt/yum/brew/winget)
+name: Publish statelet (PyPI/apt/yum/brew/winget)
 
 on:
   workflow_dispatch:
