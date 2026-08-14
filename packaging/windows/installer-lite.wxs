@@ -1,0 +1,72 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- Statelet Lite — the single-binary, single-node distribution. Mirrors the
+       EE installer in stateletlab/statelet packaging/windows/installer.wxs but
+       under its own UpgradeCode, so the two products install, upgrade and
+       uninstall independently. -->
+  <Package
+    Name="Statelet Lite"
+    Manufacturer="stateletlab"
+    Version="$(var.Version)"
+    UpgradeCode="5E00115F-14E2-46C6-B504-09ECC54C042B">
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Statelet Lite is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="MainFeature" Title="Statelet Lite" Level="1">
+      <ComponentGroupRef Id="Binaries" />
+      <ComponentGroupRef Id="AdminUi" />
+      <ComponentRef Id="PathEntry" />
+      <ComponentRef Id="DataDir" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="StateletLite">
+        <Directory Id="BinFolder" Name="bin">
+          <!-- statelet-lite looks for the admin UI next to its own executable. -->
+          <Directory Id="UiFolder" Name="ui" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="StateletDataRoot" Name="StateletLite">
+        <Directory Id="DataFolder" Name="data" />
+      </Directory>
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Binaries" Directory="BinFolder">
+      <Component Id="LiteBin">
+        <File Source="$(var.BinDir)\statelet-lite.exe" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Harvested rather than listed: Vite emits hashed asset filenames that
+         change on every build, so an explicit File per asset would go stale. -->
+    <ComponentGroup Id="AdminUi" Directory="UiFolder">
+      <Files Include="$(var.BinDir)\ui\**" />
+    </ComponentGroup>
+
+    <Component Id="PathEntry" Directory="BinFolder" Guid="04F23BB7-3E8F-4C04-993A-045786D18468">
+      <Environment Id="PATH"
+                   Name="PATH"
+                   Value="[BinFolder]"
+                   Permanent="no"
+                   Part="last"
+                   Action="set"
+                   System="yes" />
+    </Component>
+
+    <Component Id="DataDir" Directory="DataFolder" Guid="8A8315C7-9D9C-4843-AA78-AFBEBE879961">
+      <CreateFolder />
+      <RemoveFolder Id="RemoveData" On="uninstall" />
+    </Component>
+  </Fragment>
+
+</Wix>

@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "statelet-lite"
+version = "0.1.0"
+description = "Statelet Lite — the whole database in one single-node binary: KV, vector search, and temporal causal graphs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "FSL-1.1-ALv2"
+keywords = ["statelet", "agent", "memory", "vector", "graph", "database", "llm", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+]
+
+# Same shape as the `statelet` (EE) wheel: the servers live under their own
+# import package and the client comes in as a dependency, so `pip install
+# statelet-lite` is one step and `import statelet` works in the same
+# environment without two distributions fighting over one import name.
+dependencies = [
+    "statelet-sdk>=0.1.1",
+]
+
+[project.scripts]
+statelet-lite = "statelet_lite._cli:main"
+
+[project.urls]
+Homepage = "https://statelet.com"
+Repository = "https://github.com/stateletlab/statelet"
+
+[tool.setuptools]
+packages = ["statelet_lite", "statelet_lite.bin"]
+
+[tool.setuptools.package-data]
+"statelet_lite.bin" = ["*"]
+# The built admin UI. Vite emits index.html plus a hashed assets/ tree, so this
+# has to be recursive rather than a flat glob.
+"statelet_lite" = ["ui/**/*"]

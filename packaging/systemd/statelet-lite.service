@@ -1,0 +1,21 @@
+[Unit]
+Description=Statelet Lite — single-node Statelet database
+Documentation=https://github.com/stateletlab/statelet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# One fused process; the positional argument is the data directory. The admin
+# UI is found without configuration: /usr/bin/statelet-lite resolves it as
+# ../share/statelet/ui, which the .deb/.rpm installs.
+ExecStart=/usr/bin/statelet-lite /var/lib/statelet-lite
+Restart=on-failure
+TimeoutStopSec=15
+
+Environment=RUST_LOG=info
+
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

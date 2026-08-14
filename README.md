@@ -45,9 +45,10 @@ LME_STAGE=judge LME_DETAIL_LOG=path/to/detail.log \
 | `benches/longmemeval/` | The harness proper — ingest, query, judging, metrics, reporting. A Python package with **relative imports**, invoked as `python -m benches.longmemeval`. |
 | `eval/` | Standalone retrieval/answer harnesses (`longmemeval_retrieval_eval.py` and the per-model drivers) plus `sessiondoc_postprocess.py`, which imports the retrieval harness directly. Independent of the `benches/` package. |
 | `scripts/` | Shell driver for the full-500 run (`run-longmemeval-500.sh`). |
-| `.github/workflows/` | `publish-statelet-pypi.yml` — builds the server binaries once per platform and publishes every EE channel: the PyPI wheel, the GitHub Release archives, `.deb`/`.rpm` (plus the apt/yum repo on the `packages` branch), the `.msi`/winget submission and the Homebrew formula. `publish-statelet-lite.yml` — builds and releases `statelet-lite`, the single-binary single-node form. See [Publishing](#publishing-the-statelet-server-wheel-to-pypi). |
-| `.github/scripts/` | `manylinux-build.sh` — the Linux half of both builds, run inside a manylinux container — and `build-deb.sh` / `build-rpm.sh`. |
-| `packaging/pypi/` | The server wheel's packaging skeleton: `pyproject.toml`, the `statelet_server` package and its CLI shims. Binaries are dropped in at build time. |
+| `.github/workflows/` | `publish-statelet-pypi.yml` — builds the server binaries once per platform and publishes every EE channel: the PyPI wheel, the GitHub Release archives, `.deb`/`.rpm` (plus the apt/yum repo on the `packages` branch), the `.msi`/winget submission and the Homebrew formula. `publish-statelet-lite.yml` — the same set of channels for `statelet-lite`, the single-binary single-node form: PyPI (`statelet-lite`), release archives, `.deb`/`.rpm` into the shared apt/yum repo, winget (`stateletlab.StateletLite`) and the Homebrew formula. See [Publishing](#publishing-the-statelet-server-wheel-to-pypi). |
+| `.github/scripts/` | `manylinux-build.sh` — the Linux half of both builds, run inside a manylinux container — and `build-deb.sh` / `build-rpm.sh`, which default to the EE `statelet` package and take `PKG_*` overrides for `statelet-lite`. |
+| `packaging/pypi/`, `packaging/pypi-lite/` | The two wheels' packaging skeletons: `pyproject.toml`, the `statelet_server` / `statelet_lite` packages and their CLI shims. Binaries are dropped in at build time. |
+| `packaging/systemd/`, `packaging/windows/` | The lite service unit and WiX installer. The EE equivalents live in the engine repository; the lite ones live here because the engine contributes only the compiled binary to that pipeline. |
 
 The `benches/` prefix is kept rather than flattened to a top-level
 `longmemeval/`: the package uses relative imports and every documented command
@@ -71,7 +72,16 @@ The FSL-licensed single-node form, `statelet-lite`, ships separately from
 [`.github/workflows/publish-statelet-lite.yml`](.github/workflows/publish-statelet-lite.yml):
 one fused binary per platform (bare, plus an archive that adds the admin UI),
 released under `lite-v<version>` tags so it never collides with the EE
-releases (`v<version>`).
+releases (`v<version>`). It ships the same channels as the EE workflow —
+`pip install statelet-lite`, `.deb`/`.rpm` into the shared `packages`-branch
+apt/yum repo, `brew install stateletlab/statelet/statelet-lite` and winget's
+`stateletlab.StateletLite` — but as the `statelet-lite` package everywhere.
+The PyPI project `statelet-lite` needs its own Trusted Publisher entry bound
+to `publish-statelet-lite.yml` (environment `pypi`); the tap and winget
+tokens are shared with the EE workflow. Because both products bind the same
+default ports and install the admin UI at the same `share/statelet/ui` path,
+the lite deb/rpm/brew packages declare a conflict with `statelet` instead of
+pretending to coexist with it.
 
 **What the package is.** `statelet` on PyPI is the **server** distribution: the
 three Rust executables, the console-script shims that exec them,
