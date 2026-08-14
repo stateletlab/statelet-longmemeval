@@ -45,8 +45,8 @@ LME_STAGE=judge LME_DETAIL_LOG=path/to/detail.log \
 | `benches/longmemeval/` | The harness proper — ingest, query, judging, metrics, reporting. A Python package with **relative imports**, invoked as `python -m benches.longmemeval`. |
 | `eval/` | Standalone retrieval/answer harnesses (`longmemeval_retrieval_eval.py` and the per-model drivers) plus `sessiondoc_postprocess.py`, which imports the retrieval harness directly. Independent of the `benches/` package. |
 | `scripts/` | Shell driver for the full-500 run (`run-longmemeval-500.sh`). |
-| `.github/workflows/` | `publish-statelet-pypi.yml` — builds and publishes the `statelet` server wheel. See [Publishing](#publishing-the-statelet-server-wheel-to-pypi). |
-| `.github/scripts/` | `manylinux-build.sh` — the Linux half of that build, run inside a manylinux container. |
+| `.github/workflows/` | `publish-statelet-pypi.yml` — builds the server binaries once per platform and publishes every EE channel: the PyPI wheel, the GitHub Release archives, `.deb`/`.rpm` (plus the apt/yum repo on the `packages` branch), the `.msi`/winget submission and the Homebrew formula. `publish-statelet-lite.yml` — builds and releases `statelet-lite`, the single-binary single-node form. See [Publishing](#publishing-the-statelet-server-wheel-to-pypi). |
+| `.github/scripts/` | `manylinux-build.sh` — the Linux half of both builds, run inside a manylinux container — and `build-deb.sh` / `build-rpm.sh`. |
 | `packaging/pypi/` | The server wheel's packaging skeleton: `pyproject.toml`, the `statelet_server` package and its CLI shims. Binaries are dropped in at build time. |
 
 The `benches/` prefix is kept rather than flattened to a top-level
@@ -57,7 +57,21 @@ and the shell driver for no functional gain.
 ## Publishing the `statelet` server wheel to PyPI
 
 `pip install statelet` is served by
-[`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml).
+[`.github/workflows/publish-statelet-pypi.yml`](.github/workflows/publish-statelet-pypi.yml),
+which also ships every other EE channel — the GitHub Release archives, apt,
+yum, Homebrew and winget — from the same per-platform build. It used to be two
+workflows (this one and a separate `publish-packages.yml`) that each compiled
+the same engine ref on the same five platforms; merged, the Rust builds run
+once and one dispatch ships every channel from the same commit. The filename
+keeps the old PyPI-only name because the PyPI Trusted Publisher is bound to
+the workflow *filename* — renaming the file breaks the OIDC exchange until the
+publisher on pypi.org is updated to match.
+
+The FSL-licensed single-node form, `statelet-lite`, ships separately from
+[`.github/workflows/publish-statelet-lite.yml`](.github/workflows/publish-statelet-lite.yml):
+one fused binary per platform (bare, plus an archive that adds the admin UI),
+released under `lite-v<version>` tags so it never collides with the EE
+releases (`v<version>`).
 
 **What the package is.** `statelet` on PyPI is the **server** distribution: the
 three Rust executables, the console-script shims that exec them,
@@ -69,7 +83,7 @@ one step on Windows as well — and the built admin UI, all under a
 **The admin UI.** It is a Vite app in the engine repository that no CI job had
 ever built, so no channel shipped it, and every packaged install answered 404
 on the management port while its JSON API worked — the UI looked absent rather
-than unbuilt. Both workflows now build it and place it where the gateway looks:
+than unbuilt. Every channel now builds it and places it where the gateway looks:
 inside the wheel for pip, `/usr/share/statelet/ui` for deb and rpm, beside the
 binaries in the tarballs, `pkgshare/ui` for Homebrew. It costs 207 KB against a
 30 MB binary. The client library is *not* bundled — it is
@@ -135,18 +149,20 @@ which would need `musllinux` wheels, and Windows on ARM.
    the client first. (The build itself does not care: its smoke test installs
    with `--no-deps`.)
 
-**Running it.** Manually via *Actions → Publish statelet to PyPI → Run
-workflow*, taking a `ref` of the engine repository (default `main`), an
-optional `version` override, and a `dry_run` box that builds and smoke-tests
-the wheels without publishing. Or automatically by pushing a
-`statelet-v<version>` tag here, which builds engine tag `<version>` —
-`statelet-v0.1.1` → `v0.1.1`.
+**Running it.** Manually via *Actions → Publish statelet (PyPI +
+apt/yum/brew/winget) → Run workflow*, taking a required `version`, a `ref` of
+the engine repository (default `main`), a `dry_run` box that builds, packages
+and smoke-tests everything without publishing, and `skip_pypi` /
+`skip_packages` boxes for republishing one side without re-shipping the other.
+Or automatically by pushing a `statelet-v<version>` tag here, which builds
+engine tag `v<version>` — `statelet-v0.1.1` → `v0.1.1`.
 
-The version comes from [`packaging/pypi/pyproject.toml`](packaging/pypi/pyproject.toml)
-unless overridden; publishing uses `skip-existing`, so re-running against a
-version already on PyPI is a no-op rather than an error. Keep the triggers as
-they are — `pull_request` would hand the private-repo token to fork
-contributors.
+The `version` input stamps the wheel, the release tag and every package, so
+all channels agree; the version line in
+[`packaging/pypi/pyproject.toml`](packaging/pypi/pyproject.toml) only serves
+local builds. Publishing uses `skip-existing`, so re-running against a version
+already on PyPI is a no-op rather than an error. Keep the triggers as they
+are — `pull_request` would hand the private-repo token to fork contributors.
 
 **A note on the container build script.** The manylinux build lives in
 [`.github/scripts/manylinux-build.sh`](.github/scripts/manylinux-build.sh)

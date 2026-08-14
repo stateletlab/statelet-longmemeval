@@ -10,8 +10,10 @@
 # and silently ran the remainder on the host instead of in the container.
 #
 # Expects, from `docker run -e`:
-#   TARGET      rust target triple to build
-#   CARGO_HOME  writable, on the mounted workspace so rustup survives the step
+#   TARGET           rust target triple to build
+#   CARGO_HOME       writable, on the mounted workspace so rustup survives the step
+#   CARGO_EXTRA_ARGS optional extra cargo arguments — the lite workflow passes
+#                    `--bin statelet-lite` to build just the fused binary
 # and the engine checkout mounted at the working directory.
 set -euo pipefail
 
@@ -95,7 +97,10 @@ echo "::group::cargo build"
 # --locked: build exactly the graph in the engine's committed Cargo.lock, so a
 # floating dependency cannot pick up an untested release (ort rc.12 -> rc.13
 # broke this once) and end up inside a published wheel.
+# CARGO_EXTRA_ARGS is word-split on purpose (e.g. `--bin statelet-lite`).
+# shellcheck disable=SC2086
 cargo build --locked --release \
     --features data-node,agent-state \
-    --target "$TARGET"
+    --target "$TARGET" \
+    ${CARGO_EXTRA_ARGS:-}
 echo "::endgroup::"

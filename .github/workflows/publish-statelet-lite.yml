@@ -1,0 +1,296 @@
+# Builds and releases `statelet-lite` — the whole database in ONE single-node
+# process. It fuses the three server roles (metadata plane, data node, gateway)
+# into one binary, hard-locked to a single node; this is the FSL-licensed
+# distribution form, while the separate cluster binaries that the EE workflow
+# (publish-statelet-pypi.yml) ships are the enterprise-licensed one.
+#
+# Per platform the release carries two assets:
+#
+#   statelet-lite-<version>-<platform>[.exe]     the bare binary — curl it,
+#                                                chmod it, run it
+#   statelet-lite-<version>-<platform>.tar.gz    the binary plus the admin UI
+#   (.zip on Windows)
+#
+# Both, because the admin UI is not embedded: the gateway serves it from a
+# `ui/` directory next to its own executable, so the bare binary runs fine but
+# answers 404 on the management port. The archive is the form that includes it.
+#
+# Releases are tagged `lite-v<version>` so they never collide with the EE
+# releases (`v<version>`) on this repository. Same repository for the same
+# reason as the EE channels: the engine repo is private, and private release
+# assets are not downloadable.
+#
+# Required configuration:
+#   secrets.STATELET_REPO_TOKEN  fine-grained PAT, Contents:read on
+#                                stateletlab/statelet (shared with the EE
+#                                workflow)
+#
+# Note: the engine source is private. Manual/tag triggers only — never
+# `pull_request`, which would expose the token to fork contributors.
+
+name: Publish statelet-lite (single binary)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, no leading v (e.g. 0.1.1)"
+        required: true
+      ref:
+        description: "Ref of stateletlab/statelet to build"
+        required: false
+        default: main
+      dry_run:
+        description: "Build, but cut no release"
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - "statelet-lite-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-statelet-lite
+  cancel-in-progress: false
+
+jobs:
+  # Tag `statelet-lite-v0.1.1` builds engine ref `v0.1.1` as version 0.1.1 —
+  # the engine is tagged once and both this and the EE workflow build from it.
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      ref: ${{ steps.meta.outputs.ref }}
+    steps:
+      - id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#statelet-lite-v}"
+            REF="${GITHUB_REF_NAME#statelet-lite-}"
+          else
+            VERSION="$INPUT_VERSION"
+            REF="${INPUT_REF:-main}"
+          fi
+          test -n "$VERSION" || { echo "::error::no version to build"; exit 1; }
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'ref=%s\n'     "$REF"     >> "$GITHUB_OUTPUT"
+          printf 'Building stateletlab/statelet@%s as statelet-lite %s\n' "$REF" "$VERSION"
+
+  build:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Same five rows and the same toolchain discipline as the EE
+          # workflow — see publish-statelet-pypi.yml for why the Linux rows
+          # build inside manylinux containers via `docker run` and what the
+          # glibc floor check protects.
+          - os: macos-14
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+          - os: macos-14
+            target: x86_64-apple-darwin
+            platform: darwin-amd64
+          - os: ubuntu-latest
+            build_image: quay.io/pypa/manylinux2014_x86_64
+            target: x86_64-unknown-linux-gnu
+            platform: linux-amd64
+            glibc_max: "2.17"
+          - os: ubuntu-24.04-arm
+            build_image: quay.io/pypa/manylinux2014_aarch64
+            target: aarch64-unknown-linux-gnu
+            platform: linux-arm64
+            glibc_max: "2.17"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows-amd64
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: statelet
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+        with:
+          path: lme
+          persist-credentials: false
+
+      - name: Checkout stateletlab/statelet
+        uses: actions/checkout@v4
+        with:
+          repository: stateletlab/statelet
+          ref: ${{ needs.meta.outputs.ref }}
+          token: ${{ secrets.STATELET_REPO_TOKEN }}
+          path: statelet
+          persist-credentials: false
+
+      # See publish-statelet-pypi.yml for why these are wired by hand.
+      - name: Configure Windows build toolchain
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: |
+          set -euo pipefail
+          test -d "/c/Program Files/LLVM/bin" \
+            || { echo "::error::LLVM not found"; exit 1; }
+          test -x "/c/Strawberry/perl/bin/perl.exe" \
+            || { echo "::error::Strawberry Perl not found"; exit 1; }
+          printf 'LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin\n' >> "$GITHUB_ENV"
+          printf 'OPENSSL_SRC_PERL=C:\\Strawberry\\perl\\bin\\perl.exe\n' >> "$GITHUB_ENV"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the admin UI
+        working-directory: statelet/ui
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          test -f dist/index.html || { echo "::error::UI build produced no index.html"; exit 1; }
+          du -sh dist
+
+      - name: Install Rust
+        if: matrix.build_image == ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo build
+        if: matrix.build_image == ''
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: statelet
+          key: lite-${{ matrix.target }}
+
+      # `--bin statelet-lite` builds only the fused binary, not the ee/ crate.
+      # data-node is its required feature; agent-state is the FSL-licensed
+      # agent-memory surface (the enterprise capabilities are enabled only via
+      # the ee/ crate, which this build never touches).
+      - name: Build statelet-lite
+        if: matrix.build_image == ''
+        run: cargo build --locked --release --features data-node,agent-state --bin statelet-lite --target ${{ matrix.target }}
+
+      - name: Build statelet-lite (manylinux container)
+        if: matrix.build_image != ''
+        working-directory: .
+        env:
+          BUILD_IMAGE: ${{ matrix.build_image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/work" -w /work/statelet \
+            -e CARGO_HOME=/work/.cargo-home \
+            -e CARGO_TERM_COLOR=always \
+            -e TARGET="$TARGET" \
+            -e CARGO_EXTRA_ARGS="--bin statelet-lite" \
+            "$BUILD_IMAGE" \
+            bash /work/lme/.github/scripts/manylinux-build.sh
+
+      - name: Stage the payload
+        working-directory: .
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in Windows) EXE=".exe" ;; *) EXE="" ;; esac
+          SRC="statelet/target/${{ matrix.target }}/release"
+          rm -rf stage && mkdir -p stage
+          cp "$SRC/statelet-lite$EXE" "stage/statelet-lite$EXE"
+          chmod +x "stage/statelet-lite$EXE"
+          # The fused process serves the admin UI from `ui/` next to its own
+          # executable, exactly like the cluster gateway.
+          cp -R statelet/ui/dist stage/ui
+          ls -lh stage
+
+      # Same contract as the EE packages: the floor we imply by building in
+      # manylinux2014 has to be one the binary actually meets.
+      - name: Verify the glibc floor
+        if: matrix.glibc_max != ''
+        working-directory: .
+        run: |
+          set -euo pipefail
+          need="$(objdump -T stage/statelet-lite \
+                    | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1 || true)"
+          need="${need#GLIBC_}"
+          echo "binary needs at most glibc ${need:-none}; floor is ${{ matrix.glibc_max }}"
+          if [ -n "$need" ] && \
+             [ "$(printf '%s\n%s\n' "$need" "${{ matrix.glibc_max }}" | sort -V | tail -1)" \
+               != "${{ matrix.glibc_max }}" ]; then
+            echo "::error::binary requires glibc $need, above the floor ${{ matrix.glibc_max }}"
+            exit 1
+          fi
+
+      - name: Assemble release assets
+        working-directory: .
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="statelet-lite-${VERSION}-${{ matrix.platform }}"
+          mkdir -p out
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp stage/statelet-lite.exe "out/${NAME}.exe"
+            (cd stage && 7z a -tzip "../out/${NAME}.zip" ./*) >/dev/null
+          else
+            cp stage/statelet-lite "out/${NAME}"
+            tar -czf "out/${NAME}.tar.gz" -C stage .
+          fi
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lite-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    needs: [meta, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # cut the release on this repository
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: lite-*
+          merge-multiple: true
+
+      # The bare binaries have no extension to checksum-by-eye, so ship one
+      # SHA256SUMS covering every asset.
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum statelet-lite-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: lite-v${{ needs.meta.outputs.version }}
+          name: Statelet Lite v${{ needs.meta.outputs.version }}
+          generate_release_notes: false
+          body: |
+            `statelet-lite` — the whole database in one single-node process
+            (metadata plane, data node and gateway fused into one binary).
+
+            The bare `statelet-lite-*` files are the binary itself: download,
+            `chmod +x`, run. The `.tar.gz`/`.zip` archives additionally carry
+            the admin UI, which the management port serves from a `ui/`
+            directory next to the executable — the bare binary works but
+            answers 404 there.
+          files: |
+            dist/statelet-lite-*
+            dist/SHA256SUMS
