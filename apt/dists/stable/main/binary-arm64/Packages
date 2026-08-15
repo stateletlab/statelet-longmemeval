@@ -15,3 +15,23 @@ Description: Distributed key-value storage engine with LSM-tree, Raft, and vecto
  Statelet is a distributed KV store in Rust with HNSW vector search,
  temporal graph engine, and Redis-compatible protocol support.
 
+Package: statelet-lite
+Version: 0.1.4
+Architecture: arm64
+Maintainer: Statelet Team <team@statelet.ai>
+Depends: libc6 (>= 2.17), libgcc-s1 | libgcc1, libstdc++6
+Conflicts: statelet
+Filename: pool/statelet-lite_0.1.4_arm64.deb
+Size: 20213046
+MD5sum: 673d1b141714904173f9713af9995e4f
+SHA1: 4a737a7d5c1bd9dc2a24279fa51f75abd5940d53
+SHA256: 03eee51b2b545f469676201629751a413234d2949433faac2c3112e6a9651f47
+Section: database
+Priority: optional
+Homepage: https://github.com/stateletlab/statelet
+Description: Single-node Statelet database in one binary — KV, vector search, and temporal causal graphs
+ Statelet Lite fuses the metadata plane, the data node and the
+ gateway into one single-node process. It is the FSL-licensed form
+ of the Statelet engine; the statelet package carries the separate
+ cluster binaries.
+
