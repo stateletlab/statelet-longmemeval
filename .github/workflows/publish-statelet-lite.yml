@@ -230,8 +230,14 @@ jobs:
       # data-node is its required feature; agent-state is the FSL-licensed
       # agent-memory surface (the enterprise capabilities are enabled only via
       # the ee/ crate, which this build never touches).
+      # STATELET_LITE_VERSION bakes the RELEASE version into `--version`:
+      # the crate version in Cargo.toml does not track the distribution
+      # version, so without it every wheel/brew/deb binary reported "0.1.0"
+      # (API audit 2026-08-21).
       - name: Build statelet-lite
         if: matrix.build_image == ''
+        env:
+          STATELET_LITE_VERSION: ${{ needs.meta.outputs.version }}
         run: cargo build --locked --release --features data-node,agent-state --bin statelet-lite --target ${{ matrix.target }}
 
       - name: Build statelet-lite (manylinux container)
@@ -240,6 +246,7 @@ jobs:
         env:
           BUILD_IMAGE: ${{ matrix.build_image }}
           TARGET: ${{ matrix.target }}
+          STATELET_LITE_VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
           docker run --rm \
@@ -247,6 +254,7 @@ jobs:
             -e CARGO_HOME=/work/.cargo-home \
             -e CARGO_TERM_COLOR=always \
             -e TARGET="$TARGET" \
+            -e STATELET_LITE_VERSION="$STATELET_LITE_VERSION" \
             -e CARGO_EXTRA_ARGS="--bin statelet-lite" \
             "$BUILD_IMAGE" \
             bash /work/lme/.github/scripts/manylinux-build.sh

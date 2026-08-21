@@ -7,7 +7,11 @@ name = "statelet-lite"
 version = "0.1.0"
 description = "Statelet Lite — the whole database in one single-node binary: KV, vector search, and temporal causal graphs"
 readme = "README.md"
-requires-python = ">=3.9"
+# Must track statelet-sdk's floor: the sdk's generated grpc stubs need
+# grpcio>=1.81, which dropped py3.9. With ">=3.9" here, a py3.9 pip resolved
+# lite 0.1.5 + sdk 0.1.4 (auto-downgrading the sdk past its own fix) and
+# `import statelet` still failed on the grpc version check (2026-08-21).
+requires-python = ">=3.10"
 license = "FSL-1.1-ALv2"
 keywords = ["statelet", "agent", "memory", "vector", "graph", "database", "llm", "ai"]
 classifiers = [
@@ -23,7 +27,10 @@ classifiers = [
 # statelet-lite` is one step and `import statelet` works in the same
 # environment without two distributions fighting over one import name.
 dependencies = [
-    "statelet-sdk>=0.1.1",
+    # 0.1.5 is the first sdk release whose metadata declares the real
+    # python/grpcio floor; anything older lets pip "solve" an incompatible
+    # environment by downgrading the sdk instead of refusing the install.
+    "statelet-sdk>=0.1.5",
 ]
 
 [project.scripts]
