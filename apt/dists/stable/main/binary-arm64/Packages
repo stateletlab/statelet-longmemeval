@@ -4,10 +4,10 @@ Architecture: arm64
 Maintainer: Statelet Team <team@statelet.ai>
 Depends: libc6 (>= 2.17), libgcc-s1 | libgcc1, libstdc++6
 Filename: pool/statelet_0.1.5_arm64.deb
-Size: 32340296
-MD5sum: 4af45aeb941a6afab83238cede18bc37
-SHA1: ea28a2116940d89c25295251aa2120f78e5d0f30
-SHA256: 2abf3a5f405e55c56e19f7c26117ca69307595a3b35eab5d3c45f32f17e75e0e
+Size: 32280830
+MD5sum: 2c2f3bed17af137441363b6ce092823e
+SHA1: 55c01d102943b78ba282da3598a1ab551316c503
+SHA256: 43c01dd8255477ccd622315655e21aa2ed261359a6a7c603e85c8f3b99a2af15
 Section: database
 Priority: optional
 Homepage: https://github.com/stateletlab/statelet
