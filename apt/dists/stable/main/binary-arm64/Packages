@@ -16,16 +16,16 @@ Description: Distributed key-value storage engine with LSM-tree, Raft, and vecto
  temporal graph engine, and Redis-compatible protocol support.
 
 Package: statelet-lite
-Version: 0.1.5
+Version: 0.1.6
 Architecture: arm64
 Maintainer: Statelet Team <team@statelet.ai>
 Depends: libc6 (>= 2.17), libgcc-s1 | libgcc1, libstdc++6
 Conflicts: statelet
-Filename: pool/statelet-lite_0.1.5_arm64.deb
-Size: 20467306
-MD5sum: 297f9c7312835c0c840f6112b3524561
-SHA1: 29f8f1f3759cdf1833d277296ceb5669d3fca28f
-SHA256: f70838103af28ce0a45b194e9d5a52f8b4c2845d18367f40f99d2b04c3f12c8d
+Filename: pool/statelet-lite_0.1.6_arm64.deb
+Size: 20467140
+MD5sum: aac440890cea6dde4aaecf1d3d81d608
+SHA1: 5476d6c8b05ccd768d90dc3ac7fec07c5386693c
+SHA256: 1a9aaffda3beb76b4856ec722f95301d544cb7d3542eb664526554ed53cd54d9
 Section: database
 Priority: optional
 Homepage: https://github.com/stateletlab/statelet
