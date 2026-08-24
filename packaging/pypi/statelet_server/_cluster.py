@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ._cli import binary_path, ui_dir
+from ._cli import binary_path, ort_dylib_path, ui_dir
 
 METADATA_PORT = 8379
 GATEWAY_PORT = 9379
@@ -221,6 +221,10 @@ def do_start(nodes: int) -> int:
         # Without this the gateway looks for the admin UI at the relative path
         # `ui/dist` and serves 404s for every page.
         "GATEWAY_UI_DIR": os.environ.get("GATEWAY_UI_DIR") or (ui_dir() or ""),
+        # The gateway loads libonnxruntime dynamically for semantic search;
+        # hand it the copy from the `onnxruntime` wheel this package depends
+        # on (empty is treated as unset by the engine).
+        "ORT_DYLIB_PATH": os.environ.get("ORT_DYLIB_PATH") or (ort_dylib_path() or ""),
     }, root)
     if not _wait_for_port(GATEWAY_PORT, 20, "gateway"):
         print(f"  see {root / 'logs' / 'gateway.log'}", file=sys.stderr)

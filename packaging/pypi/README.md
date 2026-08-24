@@ -28,6 +28,22 @@ package; nothing else to install or configure.
 
 Data and logs live under `~/.statelet/cluster`, or `$STATELET_DATA_DIR`.
 
+## Semantic search
+
+Text embedding runs locally in the gateway (ONNX, no API keys). ONNX Runtime
+itself comes in through the `onnxruntime` wheel this package depends on —
+nothing to install. The embedding model is a one-time download:
+
+```bash
+statelet-gateway --fetch-models   # multilingual-e5-small → ~/.statelet/models/
+statelet-cluster start            # the gateway auto-discovers it there
+```
+
+Without the model, KV / graph / explicit-vector calls all work, but any
+text-embedding call answers `FAILED_PRECONDITION`. A custom model directory
+(`tokenizer.json` + `model.onnx`) can be pointed at with
+`STATELET_EMBEDDING_MODEL`.
+
 The individual executables are on your `PATH` too, for anyone driving them
 under systemd, Docker or a supervisor of their own —
 
