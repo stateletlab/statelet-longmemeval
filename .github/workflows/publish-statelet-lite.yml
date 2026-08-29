@@ -920,6 +920,11 @@ jobs:
         with:
           ref: packages
           path: repo
+          # Full history: the concurrent-publish retry below resets onto the
+          # freshly fetched remote tip; a depth-1 clone can't always resolve
+          # that ref exchange. The branch holds only package metadata + pool
+          # files, so this stays cheap.
+          fetch-depth: 0
         continue-on-error: true
 
       - uses: actions/download-artifact@v4
@@ -977,8 +982,43 @@ jobs:
           cd repo
           git config user.name "statelet-ci"
           git config user.email "ci@statelet.ai"
+          url="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git add -A
           git commit -qm "packages: statelet-lite ${{ needs.meta.outputs.version }}" || {
             echo "nothing changed"; exit 0; }
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
-            HEAD:packages
+          # Concurrent-publish race: the ee and lite workflows both publish
+          # this same `packages` branch, so a back-to-back release gets a
+          # non-fast-forward rejection here. A rebase would conflict on (and
+          # a naive retry would clobber) the GENERATED index files, silently
+          # unlisting the other run's packages — so on rejection we reset to
+          # the fresh remote tip, re-add our artifacts, RE-SCAN the merged
+          # pool, and re-commit. Deterministic, conflict-free, and both runs'
+          # packages stay indexed no matter which push lands last.
+          for attempt in 1 2 3 4 5; do
+            if git push "$url" HEAD:packages; then
+              exit 0
+            fi
+            echo "push rejected (attempt $attempt/5): packages advanced concurrently — re-indexing on the new tip"
+            git fetch "$url" packages
+            git reset --hard FETCH_HEAD
+            mkdir -p apt/pool apt/dists/stable/main/binary-amd64 \
+                     apt/dists/stable/main/binary-arm64 yum/x86_64 yum/aarch64
+            cp ../new-debs/*.deb apt/pool/
+            cp ../new-rpms/*.x86_64.rpm yum/x86_64/
+            cp ../new-rpms/*.aarch64.rpm yum/aarch64/
+            (
+              cd apt
+              for arch in amd64 arm64; do
+                dpkg-scanpackages --arch "$arch" pool \
+                  > "dists/stable/main/binary-$arch/Packages"
+                gzip -kf "dists/stable/main/binary-$arch/Packages"
+              done
+            )
+            createrepo_c yum/x86_64/
+            createrepo_c yum/aarch64/
+            git add -A
+            git commit -qm "packages: statelet-lite ${{ needs.meta.outputs.version }}" || {
+              echo "already published on the new tip"; exit 0; }
+          done
+          echo "giving up after 5 attempts"
+          exit 1
