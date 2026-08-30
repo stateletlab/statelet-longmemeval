@@ -887,6 +887,21 @@ jobs:
           echo "--- manifests"
           for f in "$DIR"/*.yaml; do echo "== $f"; cat "$f"; done
 
+          # The winget-pkgs fork drifts thousands of commits behind upstream
+          # between releases, and wingetcreate refuses to reuse a fork it
+          # cannot fast-forward ("The forked repository could not be synced
+          # with the upstream commits", 2026-08-30 — both publish runs died
+          # here). Fast-forward it via the merge-upstream API first; the fork's
+          # master carries no unique commits (submissions ride branches), so
+          # this always fast-forwards. Failure is a warning, not fatal: a 404
+          # just means wingetcreate will create the fork itself.
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer $WINGET_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/stateletlab/winget-pkgs/merge-upstream \
+            -d '{"branch":"master"}' \
+            || echo "::warning::winget-pkgs fork sync failed; submit may refuse"
+
           curl -fsSL -o wingetcreate.exe https://aka.ms/wingetcreate/latest
           # wingetcreate forks microsoft/winget-pkgs itself; the token needs the
           # classic `public_repo` scope and nothing more.
