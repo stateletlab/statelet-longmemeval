@@ -22,10 +22,10 @@ Maintainer: Statelet Team <team@statelet.ai>
 Depends: libc6 (>= 2.17), libgcc-s1 | libgcc1, libstdc++6
 Conflicts: statelet
 Filename: pool/statelet-lite_0.1.6_amd64.deb
-Size: 20887020
-MD5sum: 77f82cc5119e112475c8b723349caea5
-SHA1: 8282179746325b173d26ed22cac0840290511551
-SHA256: d725db9c7950061b47e5326e4b417a3b0b4bad1a3f866294fa0879881019e0e3
+Size: 20634884
+MD5sum: e8e5b9cf4f8014091e06041aa031e589
+SHA1: 6ddda5f209952aaf04a75d2ede8a12f1a36a2032
+SHA256: 6af9c6bc521ebbb0c15f3f2317408c0f5e025d22c14f40d0dff2424d4ea7164f
 Section: database
 Priority: optional
 Homepage: https://github.com/stateletlab/statelet
