@@ -225,6 +225,17 @@ def main() -> None:
         dylib = ort_dylib_path()
         if dylib:
             os.environ["ORT_DYLIB_PATH"] = dylib
+        elif not informational:
+            # Reachable when the dependency was skipped (`--no-deps`) or the
+            # wheel predates it: the engine then reports the same thing per
+            # model, but only after the models have already been downloaded.
+            print(
+                "statelet-lite: WARNING: no ONNX Runtime library found in this "
+                "environment — semantic search will be unavailable. Reinstall with "
+                "`pip install --force-reinstall statelet-lite`, which depends on "
+                "onnxruntime, or point ORT_DYLIB_PATH at a libonnxruntime.",
+                file=sys.stderr,
+            )
 
     binary = binary_path()
     if not os.path.isfile(binary):
