@@ -245,4 +245,20 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-    sys.exit(subprocess.call([binary] + args))
+
+    # Replace this process with the engine rather than running it as a child.
+    # As a child it outlives the wrapper: `statelet-lite` in `ps` is the Python
+    # console script, and a SIGTERM aimed at that pid — a service manager
+    # stopping the unit, a supervisor, a plain `kill` — reaps only the wrapper.
+    # The engine keeps running, still bound to 9379/9380/6380 and still holding
+    # the data directory's flock, so the next start dies with "already locked by
+    # another raft_engine process ... delete LOCK and retry" while the process
+    # that holds it is very much alive. `execv` leaves exactly one pid: the one
+    # a supervisor tracks IS the engine, and signals reach it directly.
+    argv = [binary] + args
+    if sys.platform == "win32":
+        # No exec semantics worth having on Windows: `execv` there spawns a new
+        # process and returns immediately, which detaches the console and breaks
+        # Ctrl-C. Keep the child and pass its exit code up.
+        sys.exit(subprocess.call(argv))
+    os.execv(binary, argv)
