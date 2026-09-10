@@ -899,20 +899,58 @@ jobs:
           echo "--- manifests"
           for f in "$DIR"/*.yaml; do echo "== $f"; cat "$f"; done
 
-          # The winget-pkgs fork drifts thousands of commits behind upstream
+          # The winget-pkgs fork drifts hundreds of commits behind upstream
           # between releases, and wingetcreate refuses to reuse a fork it
           # cannot fast-forward ("The forked repository could not be synced
           # with the upstream commits", 2026-08-30 — both publish runs died
-          # here). Fast-forward it via the merge-upstream API first; the fork's
-          # master carries no unique commits (submissions ride branches), so
-          # this always fast-forwards. Failure is a warning, not fatal: a 404
-          # just means wingetcreate will create the fork itself.
-          curl -fsSL -X POST \
-            -H "Authorization: Bearer $WINGET_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/stateletlab/winget-pkgs/merge-upstream \
-            -d '{"branch":"master"}' \
-            || echo "::warning::winget-pkgs fork sync failed; submit may refuse"
+          # here). Fast-forwarding it via merge-upstream first fixed that, but
+          # the call is not reliable on its own: on v0.1.7 it answered 422 with
+          # the body swallowed by `curl -f`, and the release lost its winget
+          # submission even though the fork was a clean fast-forward (0 ahead,
+          # 510 behind) and the same call succeeded by hand minutes later.
+          #
+          # So print what the API actually said, retry it, and if it still
+          # refuses, put the fork's master on upstream's commit outright. The
+          # fork carries no unique commits — submissions ride their own
+          # branches — so a forced update loses nothing and always lands.
+          sync_fork() {
+            local code
+            code=$(curl -sS -o sync.json -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $WINGET_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              https://api.github.com/repos/stateletlab/winget-pkgs/merge-upstream \
+              -d '{"branch":"master"}')
+            echo "merge-upstream -> HTTP $code: $(cat sync.json)"
+            [ "$code" = 200 ]
+          }
+
+          synced=no
+          for attempt in 1 2 3; do
+            if sync_fork; then synced=yes; break; fi
+            echo "::warning::winget-pkgs fork sync attempt $attempt did not succeed"
+            sleep 10
+          done
+
+          if [ "$synced" = no ]; then
+            UPSTREAM=$(curl -fsSL \
+              -H "Authorization: Bearer $WINGET_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/microsoft/winget-pkgs/git/ref/heads/master \
+              | sed -n 's/.*"sha": *"\([0-9a-f]\{40\}\)".*/\1/p' | head -1)
+            if [ -n "$UPSTREAM" ]; then
+              echo "forcing stateletlab/winget-pkgs master onto $UPSTREAM"
+              curl -sS -o force.json -w 'force ref -> HTTP %{http_code}\n' -X PATCH \
+                -H "Authorization: Bearer $WINGET_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Content-Type: application/json" \
+                https://api.github.com/repos/stateletlab/winget-pkgs/git/refs/heads/master \
+                -d "{\"sha\":\"$UPSTREAM\",\"force\":true}"
+              cat force.json
+            else
+              echo "::warning::could not read upstream master sha; submit may refuse"
+            fi
+          fi
 
           curl -fsSL -o wingetcreate.exe https://aka.ms/wingetcreate/latest
           # wingetcreate forks microsoft/winget-pkgs itself; the token needs the
